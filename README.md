@@ -22,6 +22,9 @@
 | 🗺️ **地图渲染** | 前端实时渲染 POI 标记 + 路线轨迹 |
 | 📋 **行程渲染** | 可视化每日行程卡片 |
 | 💬 **对话历史** | localStorage 持久化聊天记录 |
+| 🔌 **MCP 服务** | 将 Agent 工具通过 MCP 协议暴露，可供外部 LLM 客户端调用 |
+| 🧩 **Skills 扩展** | Markdown 格式的可插拔 Skill，无需改代码即可扩展 Agent 能力 |
+| 🧠 **会话记忆** | 多轮对话跨会话记忆，工具调用结果持久化到 artifacts |
 
 ---
 
@@ -82,17 +85,49 @@
 
 ```
 travel/
-├── agent_fastapi.py          # FastAPI 服务入口
-├── cli.py                    # 命令行交互入口
-├── config.toml               # ⚠️ 含 API Key，已加入 .gitignore，请勿提交
-├── config.toml.example       # 配置模板，复制此文件并填写 Key
-├── requirements.txt          # 依赖列表
+├── agent_fastapi.py              # FastAPI 服务入口（含 SSE 流式推送）
+├── cli.py                        # 命令行交互入口
+├── build_env.sh                  # 一键创建 uv 虚拟环境脚本
+├── config.toml                   # ⚠️ 含 API Key，已加入 .gitignore，请勿提交
+├── config.toml.example           # 配置模板，复制此文件并填写 Key
+├── requirements.txt              # 依赖列表
+│
+├── prompts/                      # 所有 Prompt 模板（Markdown 格式，支持多语言）
+│   └── tasks/
+│       ├── instruction/          # Agent 系统提示词（zh / en）
+│       ├── format_itinerary/     # 行程格式化 Prompt
+│       ├── search_hotel/         # 酒店搜索 Prompt
+│       ├── search_restaurant/    # 餐厅搜索 Prompt
+│       └── fix_json/             # JSON 修复 Prompt
+│
+├── scripts/                      # 实用工具脚本
+│   ├── build_city_adcode.py      # 构建城市 adcode 映射表
+│   ├── validate_api_keys.py      # 验证所有 API Key 是否有效
+│   └── test_memory.py            # 会话记忆功能测试
+│
+├── .storyline/                   # Skills 目录（可热加载，无需改代码）
+│   └── skills/
+│       ├── full_trip_planner/    # 完整旅行规划 Skill
+│       │   └── SKILL.md
+│       ├── hotel_recommender/    # 酒店推荐 Skill
+│       │   └── SKILL.md
+│       ├── rainy_day_alternative/# 雨天备选方案 Skill
+│       │   └── SKILL.md
+│       └── structured_planner/   # 结构化行程 Skill
+│           └── SKILL.md
+│
 ├── src/
 │   └── travel_agent/
-│       ├── agent.py          # Agent 构建 & 工具注册
-│       ├── config.py         # Pydantic 配置加载
+│       ├── agent.py              # Agent 构建 & 工具注册
+│       ├── config.py             # Pydantic 配置加载
+│       ├── mcp/                  # MCP 服务层（将工具暴露给外部客户端）
+│       │   ├── server.py         # MCP Server 启动入口
+│       │   ├── register_tools.py # 工具注册到 MCP
+│       │   └── hooks/
+│       │       └── tool_interceptors.py  # 工具调用拦截器
 │       ├── nodes/
-│       │   └── core_nodes/   # 14 个工具节点
+│       │   ├── node_manager.py   # 节点生命周期管理
+│       │   └── core_nodes/       # 14 个工具节点
 │       │       ├── search_poi.py
 │       │       ├── plan_itinerary.py
 │       │       ├── smart_plan_itinerary.py
@@ -106,15 +141,113 @@ travel/
 │       │       ├── render_map.py
 │       │       ├── render_itinerary.py
 │       │       └── json_tools.py
+│       ├── skills/
+│       │   └── skills_io.py      # Skills 加载 & 热插拔逻辑
+│       ├── storage/
+│       │   ├── agent_memory.py   # 多轮对话记忆管理
+│       │   └── session_manager.py# 会话隔离 & 生命周期
 │       └── utils/
-│           ├── prompts.py    # 系统提示词
+│           ├── prompts.py        # Prompt 加载工具
 │           └── logging.py
+│
+├── pic/                          # README 效果截图
 └── web/
-    ├── index.html            # 前端页面（⚠️ 需填写 jsapi_key）
+    ├── index.html                # 前端页面（⚠️ 需填写 jsapi_key）
     └── static/
-        ├── app.js            # 地图交互 & 聊天逻辑
+        ├── app.js                # 地图交互 & 聊天逻辑
         └── style.css
 ```
+
+---
+
+## 🔌 MCP 服务
+
+Agent 内置 **MCP（Model Context Protocol）服务层**，可将所有工具节点暴露为标准 MCP 接口，支持 Claude Desktop、Cursor 等任意 MCP 兼容客户端直接调用旅行工具。
+
+```
+src/travel_agent/mcp/
+├── server.py              # MCP Server，基于 SSE 传输
+├── register_tools.py      # 将 core_nodes 工具批量注册到 MCP
+└── hooks/
+    └── tool_interceptors.py  # 拦截器：请求鉴权、日志、限流等
+```
+
+---
+
+## 📝 Prompts 管理
+
+所有 Prompt 以 **Markdown 文件**形式管理，支持中英文双语，运行时按 `lang` 参数动态加载，无需硬编码在代码里：
+
+```
+prompts/tasks/
+├── instruction/      # Agent 全局系统提示词
+├── format_itinerary/ # 行程格式化指令
+├── search_hotel/     # 酒店搜索指令
+├── search_restaurant/# 餐厅搜索指令
+└── fix_json/         # JSON 自动修复指令
+```
+
+修改 Prompt 只需编辑对应 `.md` 文件，重启服务即可生效，无需触碰 Python 代码。
+
+---
+
+## 🧩 Skills 扩展
+
+Skills 是以 **Markdown 文件**定义的可插拔能力包，放在 `.storyline/skills/` 目录下，Agent 启动时自动扫描加载，无需修改代码即可扩展新能力：
+
+```
+.storyline/skills/
+├── full_trip_planner/        # 一句话生成完整多日行程
+│   └── SKILL.md
+├── hotel_recommender/        # 智能酒店推荐策略
+│   └── SKILL.md
+├── rainy_day_alternative/    # 雨天备选景点方案
+│   └── SKILL.md
+└── structured_planner/       # 结构化行程输出格式
+    └── SKILL.md
+```
+
+**添加新 Skill 的步骤：**
+1. 在 `.storyline/skills/` 下新建目录
+2. 创建 `SKILL.md`，用自然语言描述能力与调用方式
+3. 重启服务，Agent 自动识别并注册
+
+---
+
+## 🧠 Memory & Storage
+
+Agent 具备**跨多轮对话的工具结果记忆**能力，所有工具调用结果以 JSON 文件持久化到本地，避免重复调用 API。
+
+### ArtifactStore — 工具结果持久化
+
+每次工具调用结束后，结果自动写入 `artifacts/` 目录：
+
+```
+artifacts/
+└── <session_id>/
+    ├── meta.json              # 本会话所有 artifact 的索引（node_id / 摘要 / 时间戳）
+    ├── search_poi/
+    │   └── search_poi_<hash>.json
+    ├── check_weather/
+    │   └── check_weather_<hash>.json
+    └── search_hotel/
+        └── search_hotel_<hash>.json
+```
+
+- 同一会话内，Agent 可直接从 `ArtifactStore` 读取已有结果，**无需重复调用高德 API**
+- `meta.json` 记录每条结果的 `node_id`、`summary`、`created_at`，便于快速检索
+
+### SessionLifecycleManager — 会话生命周期
+
+`SessionLifecycleManager` 统一管理多用户并发场景下的会话隔离：
+
+| 参数 | 默认值 | 说明 |
+|------|--------|------|
+| `retention_days` | 3 | 超过此天数的历史会话自动清理 |
+| `max_sessions` | 256 | 最多保留会话数，超出时删除最旧的 |
+| `enable_cleanup` | True | 是否启用自动过期清理 |
+
+每个 HTTP 连接对应独立的 `session_id`（UUID），会话间数据完全隔离。
 
 ---
 
