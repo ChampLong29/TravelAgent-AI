@@ -67,7 +67,7 @@ def register(server: FastMCP, cfg: Settings) -> None:
         store = _get_store(mcp_ctx, cfg)
         try:
             from travel_agent.nodes.core_nodes.search_poi import search_poi_tool
-            result = await search_poi_tool(city=city, keyword=keyword, types=types, max_results=max_results)
+            result = await search_poi_tool.ainvoke({"city": city, "keyword": keyword, "types": types, "max_results": max_results})
             meta = store.save_result(
                 node_id="search_poi",
                 payload=result,
@@ -92,7 +92,7 @@ def register(server: FastMCP, cfg: Settings) -> None:
         store = _get_store(mcp_ctx, cfg)
         try:
             from travel_agent.nodes.core_nodes.check_weather import check_weather_tool
-            result = await check_weather_tool(city=city, forecast=forecast)
+            result = await check_weather_tool.ainvoke({"city": city, "forecast": forecast})
             meta = store.save_result(
                 node_id="check_weather",
                 payload=result,
@@ -119,7 +119,7 @@ def register(server: FastMCP, cfg: Settings) -> None:
         store = _get_store(mcp_ctx, cfg)
         try:
             from travel_agent.nodes.core_nodes.search_hotel import search_hotel_tool
-            result = await search_hotel_tool(city=city, keyword=keyword, budget_level=budget_level, max_results=max_results)
+            result = await search_hotel_tool.ainvoke({"city": city, "keyword": keyword, "budget_level": budget_level, "max_results": max_results})
             meta = store.save_result(
                 node_id="search_hotel",
                 payload=result,
@@ -145,7 +145,7 @@ def register(server: FastMCP, cfg: Settings) -> None:
         store = _get_store(mcp_ctx, cfg)
         try:
             from travel_agent.nodes.core_nodes.search_restaurant import search_restaurant_tool
-            result = await search_restaurant_tool(city=city, keyword=keyword, max_results=max_results)
+            result = await search_restaurant_tool.ainvoke({"city": city, "keyword": keyword, "max_results": max_results})
             meta = store.save_result(
                 node_id="search_restaurant",
                 payload=result,
@@ -171,7 +171,7 @@ def register(server: FastMCP, cfg: Settings) -> None:
         store = _get_store(mcp_ctx, cfg)
         try:
             from travel_agent.nodes.core_nodes.plan_route import plan_route_tool
-            result = await plan_route_tool(origin=origin, destination=destination, city=city)
+            result = await plan_route_tool.ainvoke({"origin": origin, "destination": destination, "city": city})
             meta = store.save_result(
                 node_id="plan_route",
                 payload=result,

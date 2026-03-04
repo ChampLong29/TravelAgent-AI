@@ -200,9 +200,20 @@ def smart_plan_itinerary_tool(
             "note":      str(p.get("note") or ""),
         }
 
-    valid_spots = [v for p in spots if (v := _valid(p))]
-    valid_hotels = [v for p in hotels if (v := _valid(p))]
-    valid_restaurants = [v for p in restaurants if (v := _valid(p))]
+    def _dedup(lst: List[Dict]) -> List[Dict]:
+        """按名称去重，保留首次出现的项（保持顺序）。"""
+        seen: set[str] = set()
+        out: List[Dict] = []
+        for item in lst:
+            key = item["name"].strip().lower()
+            if key not in seen:
+                seen.add(key)
+                out.append(item)
+        return out
+
+    valid_spots = _dedup([v for p in spots if (v := _valid(p))])
+    valid_hotels = _dedup([v for p in hotels if (v := _valid(p))])
+    valid_restaurants = _dedup([v for p in restaurants if (v := _valid(p))])
 
     if not valid_spots:
         logger.warning("[smart_plan_itinerary] no valid spots provided")
@@ -264,9 +275,20 @@ def smart_plan_itinerary_tool(
         return valid_restaurants[start:end]
 
     # ── 组装最终结构 ──────────────────────────────────────────────────────
+    # 全局景点去重：确保同一景点不会跨天出现两次
+    _used_spot_names: set[str] = set()
+
     result_days: List[Dict] = []
     for day_idx in range(days):
-        day_spots = grouped[day_idx] if day_idx < len(grouped) else []
+        day_spots_raw = grouped[day_idx] if day_idx < len(grouped) else []
+        # 跨天去重：过滤掉已被其他天使用的景点
+        day_spots = []
+        for s in day_spots_raw:
+            skey = s["name"].strip().lower()
+            if skey not in _used_spot_names:
+                _used_spot_names.add(skey)
+                day_spots.append(s)
+
         if not day_spots and day_idx >= len(grouped):
             continue
 

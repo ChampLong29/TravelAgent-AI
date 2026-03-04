@@ -6,11 +6,8 @@
     <link rel="stylesheet" href="/static/style.css" />
     <!-- Marked.js for Markdown rendering -->
     <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
-    <!-- 高德地图 JS API v2.0 -->
-    <script
-      type="text/javascript"
-      src="https://webapi.amap.com/maps?v=2.0&key=YOUR_AMAP_JSAPI_KEY"
-    ></script>
+    <!-- 高德地图 JS API v2.0（key 由后端动态注入，勿在此处硬编码） -->
+    <script type="text/javascript" id="amap-loader"></script>
   </head>
   <body>
     <div class="layout">
@@ -75,6 +72,9 @@
                 <button class="side-tab" data-tab="restaurant">🍜 餐厅</button>
               </div>
               <div id="side-panel-body" class="side-panel-body"></div>
+              <div class="side-panel-footer">
+                <button class="btn-export" id="export-pdf-btn" onclick="exportItineraryPDF()" title="导出行程为 PDF 文件">📥 导出 PDF</button>
+              </div>
             </div>
 
           </div>

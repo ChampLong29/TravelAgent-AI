@@ -527,13 +527,23 @@ function renderItineraryOnMap(obj) {
     setTimeout(fitMapBounds, 300);
   }
 
-  // 填充侧边面板数据
+  // 填充侧边面板数据（按名称去重，避免同一家酒店因每天都分配而重复）
   sidePanelData.itinerary = obj;
   sidePanelData.hotel = [];
   sidePanelData.restaurant = [];
+  var _seenHotels = {};
+  var _seenMeals = {};
   (obj.days || []).forEach(function(day) {
-    if (day.hotel) sidePanelData.hotel.push(day.hotel);
-    (day.meals || []).forEach(function(m) { sidePanelData.restaurant.push(m); });
+    if (day.hotel && !_seenHotels[day.hotel.name]) {
+      _seenHotels[day.hotel.name] = true;
+      sidePanelData.hotel.push(day.hotel);
+    }
+    (day.meals || []).forEach(function(m) {
+      if (!_seenMeals[m.name]) {
+        _seenMeals[m.name] = true;
+        sidePanelData.restaurant.push(m);
+      }
+    });
   });
 
   // 显示侧边面板
@@ -652,9 +662,11 @@ function bindSideTabs() {
 function updateSidePanelFromPois(items, type) {
   if (!items || items.length === 0) return;
   if (type === "hotel") {
-    sidePanelData.hotel = sidePanelData.hotel.concat(items);
+    var existing = new Set(sidePanelData.hotel.map(function(h) { return h.name; }));
+    items.forEach(function(h) { if (!existing.has(h.name)) { existing.add(h.name); sidePanelData.hotel.push(h); } });
   } else if (type === "restaurant") {
-    sidePanelData.restaurant = sidePanelData.restaurant.concat(items);
+    var existing = new Set(sidePanelData.restaurant.map(function(r) { return r.name; }));
+    items.forEach(function(r) { if (!existing.has(r.name)) { existing.add(r.name); sidePanelData.restaurant.push(r); } });
   }
   if (sidePanelData.hotel.length > 0 || sidePanelData.restaurant.length > 0) {
     document.getElementById("side-panel").style.display = "flex";
@@ -699,6 +711,58 @@ function bindUI() {
   sendBtn.addEventListener("click", send);
   input.addEventListener("keyup", function(e) {
     if (e.key === "Enter") send();
+  });
+}
+
+// ── 导出 PDF ──────────────────────────────────────────────────────────────
+/**
+ * 将当前 sidePanelData 发到 /api/export-pdf，
+ * 后端返回 PDF（或降级 HTML），触发浏览器下载。
+ */
+function exportItineraryPDF() {
+  if (!sidePanelData.itinerary && !sidePanelData.hotel.length && !sidePanelData.restaurant.length) {
+    alert('还没有行程数据，请先让助手规划一条旅程 🗺️');
+    return;
+  }
+  var btn = document.getElementById('export-pdf-btn');
+  if (btn) { btn.textContent = '⏳ 生成中…'; btn.disabled = true; }
+
+  fetch('/api/export-pdf', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      itinerary:  sidePanelData.itinerary  || {},
+      hotel:      sidePanelData.hotel      || [],
+      restaurant: sidePanelData.restaurant || [],
+    }),
+  })
+  .then(function(res) {
+    if (!res.ok) return res.text().then(function(t) { throw new Error(t); });
+    return res.blob();
+  })
+  .then(function(blob) {
+    // 在新标签页打开 HTML，页面自动触发 window.print()
+    // 用户在打印对话框选"另存为 PDF"即可保存
+    var url = URL.createObjectURL(blob);
+    var win = window.open(url, '_blank');
+    if (!win) {
+      // 弹窗被拦截时降级为下载 HTML
+      var a = document.createElement('a');
+      var city = (sidePanelData.itinerary || {}).city || '旅行';
+      a.href = url;
+      a.download = city + '旅行攻略.html';
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+    }
+    setTimeout(function() { URL.revokeObjectURL(url); }, 30000);
+  })
+  .catch(function(err) {
+    console.error('[exportPDF]', err);
+    alert('导出失败：' + err.message);
+  })
+  .finally(function() {
+    if (btn) { btn.textContent = '📥 导出 PDF'; btn.disabled = false; }
   });
 }
 

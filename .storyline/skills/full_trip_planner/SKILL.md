@@ -1,3 +1,11 @@
+---
+name: full_trip_planner
+description: 【SKILL】端到端旅行规划：从需求收集到生成完整 Markdown 行程报告，整合景点搜索、天气查询、酒店推荐、餐厅推荐、路线规划。
+version: 1.0.0
+author: Travel_Agent_Architect
+tags: [itinerary, planning, full-trip]
+---
+
 # full_trip_planner
 
 ## Description

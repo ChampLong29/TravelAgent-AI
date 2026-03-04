@@ -492,6 +492,28 @@ html, body {
 .side-panel-body::-webkit-scrollbar { width: 4px; }
 .side-panel-body::-webkit-scrollbar-thumb { background: #d1d5db; border-radius: 2px; }
 
+/* ── 侧边栏底部导出按钮 ─────────────────────────────────────────────── */
+.side-panel-footer {
+  flex-shrink: 0;
+  padding: 8px;
+  border-top: 1px solid #f3f4f6;
+}
+.btn-export {
+  width: 100%;
+  padding: 7px 0;
+  background: linear-gradient(135deg, #4f46e5 0%, #7c3aed 100%);
+  color: #fff;
+  border: none;
+  border-radius: 6px;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  letter-spacing: 0.5px;
+  transition: opacity 0.15s;
+}
+.btn-export:hover  { opacity: 0.88; }
+.btn-export:disabled { opacity: 0.5; cursor: not-allowed; }
+
 .side-empty {
   padding: 16px;
   text-align: center;

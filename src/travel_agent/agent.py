@@ -67,7 +67,10 @@ class ClientContext:
 
 
 def _build_llm(cfg: Settings) -> BaseChatModel:
-    return DeepSeekChatOpenAI(
+    # DeepSeek API 不接受 list 类型的 content，需要用子类拍平；
+    # 其他兼容 OpenAI 格式的服务（智谱、通义等）直接用标准 ChatOpenAI。
+    cls = DeepSeekChatOpenAI if "deepseek" in cfg.llm.base_url.lower() else ChatOpenAI
+    return cls(
         model=cfg.llm.model,
         base_url=cfg.llm.base_url,
         api_key=cfg.llm.api_key,

@@ -1,3 +1,11 @@
+---
+name: hotel_recommender
+description: 【SKILL】根据用户需求搜索并推荐合适的酒店，包含价格、位置、评分等关键信息。
+version: 1.0.0
+author: Travel_Agent_Architect
+tags: [hotel, accommodation, search]
+---
+
 # hotel_recommender
 
 ## Description

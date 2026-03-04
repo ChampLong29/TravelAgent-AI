@@ -20,7 +20,8 @@
 | ☁️ **天气查询** | 接入高德天气 API，支持预测 |
 | 💰 **预算估算** | 按人数、天数、消费习惯估算旅行花费 |
 | 🗺️ **地图渲染** | 前端实时渲染 POI 标记 + 路线轨迹 |
-| 📋 **行程渲染** | 可视化每日行程卡片 |
+| 📋 **行程渲染** | 可视化每日行程卡片（景点 / 住宿 / 餐厅分 Tab） |
+| 📥 **导出 PDF** | 一键将行程攻略导出为 PDF（浏览器原生打印，无需额外依赖） |
 | 💬 **对话历史** | localStorage 持久化聊天记录 |
 | 🔌 **MCP 服务** | 将 Agent 工具通过 MCP 协议暴露，可供外部 LLM 客户端调用 |
 | 🧩 **Skills 扩展** | Markdown 格式的可插拔 Skill，无需改代码即可扩展 Agent 能力 |
@@ -152,7 +153,7 @@ travel/
 │
 ├── pic/                          # README 效果截图
 └── web/
-    ├── index.html                # 前端页面（⚠️ 需填写 jsapi_key）
+    ├── index.html                # 前端页面（高德 JSAPI Key 由后端动态注入）
     └── static/
         ├── app.js                # 地图交互 & 聊天逻辑
         └── style.css
@@ -513,10 +514,7 @@ jsapi_key = "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx" # 高德 JS API Key
 api_key = "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"   # 同 map.api_key（共用 Web服务 Key）
 ```
 
-> ⚠️ **还需要**：打开 `web/index.html`，将 `<script src>` 标签中的 `YOUR_AMAP_JSAPI_KEY` 替换为你的 JS API Key：
-> ```html
-> src="https://webapi.amap.com/maps?v=2.0&key=你的jsapi_key"
-> ```
+> 💡 `jsapi_key` 会由后端在返回页面时自动注入，无需手动修改 `web/index.html`。
 
 ---
 
