@@ -64,7 +64,7 @@
 │  │   LangGraph ReAct Agent           │  │
 │  │   ┌──────────┐  ┌──────────────┐  │  │
 │  │   │ DeepSeek │  │  Tool Nodes  │  │  │
-│  │   │ Chat LLM │  │  (14 tools)  │  │  │
+│  │   │ Chat LLM │  │  (16 tools)  │  │  │
 │  │   └──────────┘  └──────┬───────┘  │  │
 │  └───────────────────────│───────────┘  │
 └────────────────────────── │──────────────┘
@@ -179,7 +179,7 @@ build_agent()
   ├─ 1. 初始化 DeepSeekChatOpenAI（LLM）
   ├─ 2. MultiServerMCPClient 连接 MCP Server(:8002)
   │     └─ 请求头携带 X-Travel-Session-Id
-  │     └─ tools = await client.get_tools()   ← 获取全部 14 个工具
+  │     └─ tools = await client.get_tools()   ← 获取全部 16 个工具
   ├─ 3. load_skills()  ← 扫描 .storyline/skills/
   └─ 4. create_react_agent(llm, tools + skills, system_prompt)
         ▼
@@ -200,7 +200,7 @@ LangGraph ReAct 循环
 
 本项目**不使用硬编码的 if-else 调度**，工具调用完全由 DeepSeek LLM 在 ReAct 循环中自主决定：
 
-1. **工具来源**：`build_agent()` 通过 `MultiServerMCPClient` 连接本地 MCP Server，调用 `await client.get_tools()` 获取全部 14 个工具的 schema，注入 ReAct agent
+1. **工具来源**：`build_agent()` 通过 `MultiServerMCPClient` 连接本地 MCP Server，调用 `await client.get_tools()` 获取全部 16 个工具的 schema，注入 ReAct agent
 2. **LLM 决策**：系统提示词（`prompts/tasks/instruction/zh/system.md`）告知 LLM 当前可用工具及调用规范
 3. **ReAct 循环**：LLM 在每一步推理后输出 `tool_call`，LangGraph 通过 MCP Client 将调用转发给 MCP Server，Server 执行 core_node 函数、持久化结果并返回
 
@@ -343,7 +343,7 @@ Claude Desktop、Cursor 等 MCP 兼容客户端可直接连接 `http://127.0.0.1
 ```
 src/travel_agent/mcp/
 ├── server.py              # FastMCP Server，lifespan 管理 SessionLifecycleManager
-├── register_tools.py      # 注册全部 14 个工具（含之前缺失的 8 个）
+├── register_tools.py      # 注册全部 16 个工具（4 类：数据获取/行程规划/地图渲染/工具辅助）
 └── hooks/
     └── tool_interceptors.py  # before/after 钩子：耗时统计、可扩展鉴权限流
 ```
@@ -372,25 +372,50 @@ async def lifespan(app):
 app = FastAPI(lifespan=lifespan)
 ```
 
-**已注册工具（全部 14 个）**：
+### 已注册工具（全部 16 个）
 
-| 工具 | 说明 |
-|------|------|
-| `search_poi` | POI 搜索 |
-| `search_hotel` | 酒店搜索 |
-| `search_restaurant` | 餐厅搜索 |
-| `check_weather` | 天气查询 |
-| `plan_route` | 路线规划 |
-| `plan_itinerary` | 行程草案生成 |
-| `smart_plan_itinerary` | K-means 智能行程分组 |
-| `format_itinerary` | LLM 行程报告生成 |
-| `estimate_budget` | 预算估算 |
-| `recommend_transport` | 交通建议 |
-| `render_map_pois` | 地图 POI 渲染 |
-| `render_map_route` | 地图路线渲染 |
-| `render_itinerary` | 地图行程渲染 |
-| `validate_json` / `fix_json` | JSON 校验与修复 |
-| `read_artifact` | 读取历史工具结果 |
+工具注册文件：`src/travel_agent/mcp/register_tools.py`，工具节点实现：`src/travel_agent/nodes/core_nodes/`
+
+#### 🔍 数据获取类
+
+| 工具名 | 功能 | 关键参数 |
+|--------|------|---------|
+| `search_poi` | 按关键词搜索城市内景点、酒店、餐厅等 POI，结果含坐标、评分、地址 | `city`、`keyword`、`types`（POI 类型）、`max_results`（默认 10） |
+| `check_weather` | 查询城市实时天气或未来 3 天预报 | `city`、`forecast`（`true` 返回预报，`false` 返回实时） |
+| `search_hotel` | 专用酒店搜索，支持价位档次筛选 | `city`、`keyword`、`budget_level`（`economy` / `mid` / `luxury`）、`max_results` |
+| `search_restaurant` | 专用餐厅搜索，支持菜系关键词 | `city`、`keyword`（如"火锅"、"日料"）、`max_results` |
+
+#### 🗓️ 行程规划类
+
+| 工具名 | 功能 | 关键参数 |
+|--------|------|---------|
+| `plan_itinerary` | 简单均分版行程草案：将 POI 平均分配到各天 | `city`、`days`、`pois`（POI 列表）、`preference` |
+| `smart_plan_itinerary` | **核心规划工具**：K-means 地理聚类 + 节奏控制，智能将景点/餐厅/酒店按天分组，同一天内行程地理位置相近 | `spots`、`hotels`、`restaurants`、`days`、`city`、`title`、`weather_summary`、`pace`（`relaxed` / `standard` / `intensive`） |
+| `format_itinerary` | 调用 LLM 将规划结果转化为结构化 Markdown 每日行程报告，含时间段安排和贴心提示 | `city`、`days`、`travelers`、`budget`、`raw_data` |
+| `estimate_budget` | 粗略估算旅行总花费（住宿/餐饮/门票/交通四项分类） | `days`、`city_level`（`A`/`B`/`C` 线城市）、`hotel_level`、`with_flight` |
+
+#### 🗺️ 地图渲染类
+
+| 工具名 | 功能 | 关键参数 |
+|--------|------|---------|
+| `render_map_pois` | 将 POI 列表打包为前端高德地图可渲染的标记点数据 | `items`（POI 列表）、`title`（图层标题） |
+| `render_map_route` | 将驾车/步行路线折线编码打包为前端地图渲染数据 | `polyline`（编码折线）、`origin`、`destination`、`distance_km`、`duration_min` |
+| `render_itinerary` | 将完整多日行程打包为地图有序标注数据（每天不同颜色标记） | `days`（分天 POI 列表）、`city`、`title` |
+
+#### 🛣️ 路线与交通类
+
+| 工具名 | 功能 | 关键参数 |
+|--------|------|---------|
+| `plan_route` | 调用高德路线规划 API，返回驾车距离、时长与折线坐标 | `origin`（起点名称）、`destination`（终点名称）、`city` |
+| `recommend_transport` | 根据距离建议合适的交通方式（步行 / 骑行 / 地铁 / 打车 / 城际） | `distance_km`、`city` |
+
+#### 🔧 工具辅助类
+
+| 工具名 | 功能 | 关键参数 |
+|--------|------|---------|
+| `read_artifact` | 读取当前会话历史工具调用结果（避免重复调用 API） | `artifact_id` |
+| `validate_json` | 检查字符串是否为合法 JSON，返回校验结果 | `payload` |
+| `fix_json` | 调用 LLM 自动修复非法 JSON（处理 LLM 输出时的格式错误） | `raw_text`、`instruction`（可选修复要求） |
 
 ---
 
@@ -400,12 +425,30 @@ app = FastAPI(lifespan=lifespan)
 
 ```
 prompts/tasks/
-├── instruction/      # Agent 全局系统提示词
-├── format_itinerary/ # 行程格式化指令
-├── search_hotel/     # 酒店搜索指令
-├── search_restaurant/# 餐厅搜索指令
-└── fix_json/         # JSON 自动修复指令
+├── instruction/       # Agent 全局系统提示词（规定工具调用顺序、多方案规则、地图渲染规范）
+├── format_itinerary/  # 行程格式化：指导 LLM 生成结构化 Markdown 每日行程
+├── search_hotel/      # 酒店搜索策略：价位档次判断、关键词构造规则
+├── search_restaurant/ # 餐厅搜索策略：菜系识别、位置关联规则
+└── fix_json/          # JSON 修复：非法 JSON 的 LLM 纠错指令
 ```
+
+每个目录下含 `zh/system.md`（中文）和 `en/system.md`（英文），部分含 `user.md` 用户侧模板。
+
+**`instruction/zh/system.md` 关键规范（Agent 全局行为约束）：**
+
+系统提示词规定了 LLM 在规划旅行时的**标准 7 步工具调用顺序**：
+
+```
+1. search_poi          → 搜索景点（6~10 个候选）
+2. check_weather       → 查询目的地天气
+3. search_hotel        → 搜索酒店（3~5 家）
+4. search_restaurant   → 搜索餐厅（4~6 家）
+5. smart_plan_itinerary → K-means 聚类，将所有 POI 按天分组
+6. render_itinerary    → 将分组结果渲染到前端地图
+7. format_itinerary    → 生成 Markdown 格式行程报告
+```
+
+还规定了**多方案并列规则**（如同时给出轻松版和精华版行程）、**render 工具必须在 format 之前调用** 等约束，确保地图渲染和报告生成的顺序正确。
 
 修改 Prompt 只需编辑对应 `.md` 文件，重启服务即可生效，无需触碰 Python 代码。
 
@@ -417,20 +460,133 @@ Skills 是以 **Markdown 文件**定义的可插拔能力包，放在 `.storylin
 
 ```
 .storyline/skills/
-├── full_trip_planner/        # 一句话生成完整多日行程
+├── full_trip_planner/        # 端到端完整旅行规划（5 步工作流）
 │   └── SKILL.md
-├── hotel_recommender/        # 智能酒店推荐策略
+├── hotel_recommender/        # 智能酒店推荐（4 步工作流）
 │   └── SKILL.md
-├── rainy_day_alternative/    # 雨天备选景点方案
+├── rainy_day_alternative/    # 雨天备选室内行程（4 步工作流）
 │   └── SKILL.md
-└── structured_planner/       # 结构化行程输出格式
+└── structured_planner/       # 结构化 JSON 行程输出（3 步工作流）
     └── SKILL.md
 ```
 
+### Skill 详细说明
+
+#### `full_trip_planner` — 端到端旅行规划
+
+> 触发场景：用户说"帮我规划 X 天行程"、"安排一次旅行"等完整规划请求
+
+**5 步工作流：**
+
+```
+Step 1 需求确认   → 确认城市、天数、人数、偏好（美食/文化/自然）
+Step 2 数据收集   → search_poi + check_weather + search_hotel + search_restaurant 并行采集
+Step 3 智能分组   → smart_plan_itinerary（K-means 聚类按天分配，节奏控制）
+Step 4 地图渲染   → render_itinerary（前端地图有序标注，每天不同颜色）
+Step 5 生成报告   → format_itinerary（Markdown 每日行程 + 住宿/餐厅汇总表）
+```
+
+#### `hotel_recommender` — 智能酒店推荐
+
+> 触发场景：用户问"推荐酒店"、"找个住的地方"等住宿相关请求
+
+**4 步工作流：**
+
+```
+Step 1 收集需求   → 确认城市、入住时段、价位偏好
+Step 2 搜索酒店   → search_hotel（含 budget_level 筛选）
+Step 3 展示结果   → render_map_pois（在地图上标记酒店位置）
+Step 4 用户反馈   → 收集意见，按需调整搜索关键词重试
+```
+
+#### `rainy_day_alternative` — 雨天备选室内行程
+
+> 触发场景：用户询问"下雨怎么办"、"有没有室内景点"或天气预报含雨
+
+**4 步工作流：**
+
+```
+Step 1 确认天气   → check_weather（验证是否确实有雨）
+Step 2 梳理户外   → 从已有行程中标记受影响的户外景点
+Step 3 搜室内资源 → search_poi（关键词：博物馆、商场、室内乐园、温泉）
+Step 4 对比方案   → 并列输出原方案 vs 雨天备选方案，供用户选择
+```
+
+#### `structured_planner` — 结构化 JSON 行程输出
+
+> 触发场景：用户需要机器可读的行程数据，或其他系统需要集成行程信息
+
+**3 步工作流：**
+
+```
+Step 1 信息整合   → plan_itinerary（汇总已搜集的 POI 数据）
+Step 2 JSON 转换  → 按预定 schema 输出 JSON（含每日时间段、POI 坐标、费用估算）
+Step 3 格式校验   → validate_json + fix_json（确保输出合法，自动修复格式错误）
+```
+
 **添加新 Skill 的步骤：**
-1. 在 `.storyline/skills/` 下新建目录
-2. 创建 `SKILL.md`，用自然语言描述能力与调用方式
-3. 重启服务，Agent 自动识别并注册
+1. 在 `.storyline/skills/` 下新建目录（如 `budget_optimizer/`）
+2. 创建 `SKILL.md`，用自然语言描述触发场景、工作流步骤、调用的工具链
+3. 重启服务，Agent 自动识别并注册，无需修改任何 Python 代码
+
+---
+
+## 🛠️ 工具脚本（scripts/）
+
+`scripts/` 目录提供三个独立运行的辅助脚本，用于环境验证、数据准备和功能调试：
+
+### `validate_api_keys.py` — API Key 有效性验证
+
+在首次配置或更换 Key 后，运行此脚本一键验证所有 API Key 是否能正常调用：
+
+```bash
+cd travel/
+uv run python scripts/validate_api_keys.py [--config config.toml]
+```
+
+验证内容：
+- **高德地图 Key**（`map.api_key`）：发起一次 POI 搜索请求（搜索"天安门"）
+- **高德天气 Key**（`weather.api_key`）：发起一次天气查询请求（查询北京）
+- **LLM API Key**（`llm.api_key`）：发起一次最小推理请求（`max_tokens=1`）
+
+通过 ✅ / ❌ 符号直观展示每项结果，出错时附带具体的 HTTP 状态码和错误信息。
+
+---
+
+### `build_city_adcode.py` — 城市行政区编码数据库
+
+批量调用高德地理编码 API，将预设的 38 个热门旅游城市解析为行政区编码（adcode）、省份、坐标等，并保存到 `resource/city_adcode.json`：
+
+```bash
+cd travel/
+uv run python scripts/build_city_adcode.py [--config config.toml] [--output resource/city_adcode.json]
+```
+
+预置城市涵盖：北京、上海、成都、重庆、杭州、三亚、丽江、拉萨、桂林、敦煌等 38 个热门目的地。生成的 JSON 可供工具节点在 API 调用时精确匹配行政区，避免歧义城市名称问题。
+
+---
+
+### `test_memory.py` — 会话记忆功能测试
+
+验证 `ArtifactStore` 和 `SessionLifecycleManager` 的完整功能链路：
+
+```bash
+cd travel/
+uv run python scripts/test_memory.py
+```
+
+测试覆盖 8 个场景：
+
+| 测试项 | 验证内容 |
+|--------|---------|
+| 创建 Session | `SessionLifecycleManager.new_session()` 返回合法 UUID |
+| 写入工具结果 | `save_result()` 为 search_poi / check_weather / search_hotel 各写入一条 |
+| 精确读取 | 按 `artifact_id` 读取，内容与写入一致 |
+| 最新结果查询 | `get_latest_meta(node_id)` 返回每个节点最新的 artifact |
+| context_snapshot | 打包全部节点最新结果为字典，模拟注入 LLM 上下文 |
+| 覆写更新 | 同一节点二次写入后，`get_latest_meta` 正确返回最新 artifact |
+| 磁盘持久化 | 验证 `meta.json` 和各 POI JSON 文件确实写入磁盘 |
+| 跨 Session 隔离 | 新建第二个 Session，其 snapshot 为空，不受第一个 Session 污染 |
 
 ---
 
