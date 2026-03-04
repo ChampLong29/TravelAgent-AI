@@ -34,12 +34,12 @@
 
 <p align="center">
   <img src="pic/screenshot_2.png" width="80%" alt="行程规划结果" />
-  <br><em>智能行程规划 — 按天分组展示</em>
+  <br><em>餐厅展示</em>
 </p>
 
 <p align="center">
   <img src="pic/screenshot_3.png" width="80%" alt="路线规划与 POI 标记" />
-  <br><em>路线规划与 POI 标记</em>
+  <br><em>住宿展示</em>
 </p>
 
 ---
