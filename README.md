@@ -160,17 +160,236 @@ travel/
 
 ---
 
-## 🔌 MCP 服务
+## 🔄 工作流程与模块详解
 
-Agent 内置 **MCP（Model Context Protocol）服务层**，可将所有工具节点暴露为标准 MCP 接口，支持 Claude Desktop、Cursor 等任意 MCP 兼容客户端直接调用旅行工具。
+### 整体请求流程
+
+```
+uv run uvicorn agent_fastapi:app
+        │
+        ├─ FastAPI lifespan 启动
+        │   └─ asyncio.create_task(_run_mcp_server)
+        │       └─ MCP Server 在后台启动（端口 8002）
+        │
+        ▼
+WebSocket 连接，生成 session_id（UUID）
+        ▼
+build_agent()
+  ├─ 1. 初始化 DeepSeekChatOpenAI（LLM）
+  ├─ 2. MultiServerMCPClient 连接 MCP Server(:8002)
+  │     └─ 请求头携带 X-Travel-Session-Id
+  │     └─ tools = await client.get_tools()   ← 获取全部 14 个工具
+  ├─ 3. load_skills()  ← 扫描 .storyline/skills/
+  └─ 4. create_react_agent(llm, tools + skills, system_prompt)
+        ▼
+LangGraph ReAct 循环
+  ┌─────────────────────────────────────────────┐
+  │  LLM 推理 → 决定调用工具 → 通过 MCP Client 调用        │
+  │  → MCP Server 执行 core_node 函数                      │
+  │  → ArtifactStore.save_result() 持久化结果             │
+  │  → 工具结果注入消息历史 → LLM 继续推理 → …           │
+  └─────────────────────────────────────────────┘
+        ▼
+流式推送 token 到前端（SSE）→ 地图渲染 / 行程卡片
+```
+
+---
+
+### 工具选择机制（LLM 自主决策）
+
+本项目**不使用硬编码的 if-else 调度**，工具调用完全由 DeepSeek LLM 在 ReAct 循环中自主决定：
+
+1. **工具来源**：`build_agent()` 通过 `MultiServerMCPClient` 连接本地 MCP Server，调用 `await client.get_tools()` 获取全部 14 个工具的 schema，注入 ReAct agent
+2. **LLM 决策**：系统提示词（`prompts/tasks/instruction/zh/system.md`）告知 LLM 当前可用工具及调用规范
+3. **ReAct 循环**：LLM 在每一步推理后输出 `tool_call`，LangGraph 通过 MCP Client 将调用转发给 MCP Server，Server 执行 core_node 函数、持久化结果并返回
+
+```
+用户：「帮我规划成都3天行程」
+  → LLM: 调用 check_weather（先确认天气）
+      → MCP Server 执行 check_weather_tool → ArtifactStore 持久化
+  → LLM: 调用 search_poi（搜景点）
+      → MCP Server 执行 search_poi_tool → ArtifactStore 持久化
+  → LLM: 调用 smart_plan_itinerary（K-means 聚类按天分组）
+  → LLM: 调用 render_map_pois（渲染地图标记）
+  → LLM: 调用 render_itinerary（渲染行程卡片）
+  → LLM: 输出最终文字说明
+```
+
+---
+
+### Skills 加载与选择机制
+
+Skills 是比工具更高层的**复合能力描述**，以 Markdown 文件定义，通过 `skillkit` 库加载：
+
+```python
+# agent.py
+# 1. 从 MCP Server 获取 core_nodes 工具
+client = MultiServerMCPClient(connections={...})
+tools = await client.get_tools()              # 14 个 core_nodes
+
+# 2. 扫描 .storyline/skills/ 加载 Skill 工具
+skills_tools = await load_skills(skill_dir)   # Markdown 定义的 Skills
+
+tools = tools + skills_tools                  # 合并注册给 LLM
+```
+
+- **发现时机**：每次 `build_agent()` 调用时扫描，**热插拔**：新增 `SKILL.md` 重启后自动生效，无需改代码
+- **选择时机**：与 core_nodes 完全相同，由 LLM 根据描述自主决定调用哪个 Skill
+- **Skill vs Tool**：core_nodes 是单一原子操作（搜索、查天气…），Skill 是一段自然语言描述的**工作流策略**（如「先查天气 → 再聚类 → 再格式化」），LLM 调用 Skill 后会按其描述编排多步工具调用
+
+---
+
+### Prompts 管理机制
+
+```
+prompts/tasks/<task>/<lang>/system.md   ← 系统提示词
+prompts/tasks/<task>/<lang>/user.md     ← 用户侧模板（可选）
+```
+
+`PromptBuilder` 在运行时从文件加载 Markdown，支持 `{{variable}}` 占位符替换：
+
+```python
+builder.render(task="format_itinerary", role="system", lang="zh", days=3, city="成都")
+```
+
+- **按需缓存**：首次加载后缓存在内存，避免重复 IO
+- **修改零成本**：直接编辑 `.md` 文件，重启服务即生效，不触碰 Python 代码
+
+---
+
+### 记忆功能实现
+
+项目实现了两层记忆：
+
+#### 层 1：对话上下文记忆（LangGraph 消息历史）
+
+LangGraph ReAct agent 维护完整的 `messages` 列表，包含每轮的 `HumanMessage`、`AIMessage`、`ToolMessage`。`agent_fastapi.py` 在每次请求时将历史消息传入，LLM 可感知整个对话上下文：
+
+```python
+# agent_fastapi.py
+_clean_messages_for_next_turn(messages)   # 将 list/dict content 序列化为 string
+                                           # （DeepSeek API 要求 content 必须是 string）
+await agent.ainvoke({"messages": messages})
+```
+
+#### 层 2：工具结果持久化（ArtifactStore）
+
+每次工具调用结束后，结果写入本地文件，形成跨请求的持久记忆：
+
+```
+调用 search_poi("成都", "武侯祠")
+        │
+        ▼
+ArtifactStore.save_result(
+    node_id    = "search_poi",
+    payload    = { POI 列表 },
+    summary    = "POI 搜索: 武侯祠 @ 成都",
+)
+        │
+        ▼
+artifacts/<session_id>/search_poi/search_poi_3588b6d6.json
+artifacts/<session_id>/meta.json  ← 追加索引记录
+```
+
+`context_snapshot()` 方法可将当前会话所有工具的最新结果打包为一个字典，注入到 LLM 提示词或 MCP 响应中，使 LLM 在后续轮次中感知已有数据而无需重复 API 调用。
+
+#### 会话隔离与清理（SessionLifecycleManager）
+
+```python
+mgr = SessionLifecycleManager(
+    artifacts_root = "travel_outputs/",
+    cache_root     = ".storyline/.server_cache/",
+    retention_days = 3,      # 3 天后自动清理
+    max_sessions   = 256,    # 最多保留 256 个会话
+)
+
+store = mgr.get_store(session_id)    # 取或创建当前会话的 ArtifactStore
+mgr.cleanup_expired()                # 删除过期目录（超时 or 超数量）
+```
+
+每个 WebSocket 连接对应独立 `session_id`，不同用户的 artifacts 目录完全隔离。
+
+---
+
+### MCP 服务层
+
+MCP 服务在本项目中承担**双重角色**：
+
+**① Agent 内部工具调用的统一通道**（与原项目架构对齐）
+
+所有工具调用都经过 MCP Server，而不是由 Agent 直接 import core_nodes：
+
+```
+LangGraph ReAct
+      │  tool_call
+      ▼
+MultiServerMCPClient（langchain-mcp-adapters）
+      │  HTTP streamable-http + X-Travel-Session-Id
+      ▼
+FastMCP Server（端口 8002，由 FastAPI lifespan 在后台启动）
+      │
+      ├─ 从请求头提取 session_id
+      ├─ 从 lifespan context 获取对应 ArtifactStore
+      ├─ 调用 core_node 函数（search_poi_tool 等）
+      ├─ ArtifactStore.save_result() 持久化
+      └─ 返回结果给 Agent
+```
+
+**② 对外暴露工具给第三方 LLM 客户端**
+
+Claude Desktop、Cursor 等 MCP 兼容客户端可直接连接 `http://127.0.0.1:8002/mcp`，使用所有旅行工具，无需额外开发。
 
 ```
 src/travel_agent/mcp/
-├── server.py              # MCP Server，基于 SSE 传输
-├── register_tools.py      # 将 core_nodes 工具批量注册到 MCP
+├── server.py              # FastMCP Server，lifespan 管理 SessionLifecycleManager
+├── register_tools.py      # 注册全部 14 个工具（含之前缺失的 8 个）
 └── hooks/
-    └── tool_interceptors.py  # 拦截器：请求鉴权、日志、限流等
+    └── tool_interceptors.py  # before/after 钩子：耗时统计、可扩展鉴权限流
 ```
+
+---
+
+## 🔌 MCP 服务
+
+Agent 内置 **MCP（Model Context Protocol）服务层**，在本项目中承担双重职责：
+
+**1. Agent 内部工具调用通道**：Agent 通过 `MultiServerMCPClient` 连接本地 MCP Server 获取工具，所有工具调用均经过 MCP 层，ArtifactStore 持久化统一在此完成。
+
+**2. 对外暴露工具**：支持 Claude Desktop、Cursor 等 MCP 兼容客户端直接连接 `http://127.0.0.1:8002/mcp` 使用全部旅行工具。
+
+**启动方式**：无需手动启动，`uvicorn agent_fastapi:app` 时由 FastAPI `lifespan` 自动在后台拉起 MCP Server：
+
+```python
+# agent_fastapi.py
+@asynccontextmanager
+async def lifespan(app):
+    asyncio.create_task(_run_mcp_server(cfg))  # 后台启动 MCP Server（端口 8002）
+    await asyncio.sleep(1.5)                   # 等待绑定完成
+    yield
+    # shutdown 时自动取消 task
+
+app = FastAPI(lifespan=lifespan)
+```
+
+**已注册工具（全部 14 个）**：
+
+| 工具 | 说明 |
+|------|------|
+| `search_poi` | POI 搜索 |
+| `search_hotel` | 酒店搜索 |
+| `search_restaurant` | 餐厅搜索 |
+| `check_weather` | 天气查询 |
+| `plan_route` | 路线规划 |
+| `plan_itinerary` | 行程草案生成 |
+| `smart_plan_itinerary` | K-means 智能行程分组 |
+| `format_itinerary` | LLM 行程报告生成 |
+| `estimate_budget` | 预算估算 |
+| `recommend_transport` | 交通建议 |
+| `render_map_pois` | 地图 POI 渲染 |
+| `render_map_route` | 地图路线渲染 |
+| `render_itinerary` | 地图行程渲染 |
+| `validate_json` / `fix_json` | JSON 校验与修复 |
+| `read_artifact` | 读取历史工具结果 |
 
 ---
 

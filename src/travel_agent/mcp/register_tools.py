@@ -198,4 +198,220 @@ def register(server: FastMCP, cfg: Settings) -> None:
             return {"artifact_id": artifact_id, "result": data, "isError": True}
         return {"artifact_id": artifact_id, "result": data, "isError": False}
 
-    logger.info("[MCP] registered travel tools: search_poi, check_weather, search_hotel, search_restaurant, plan_route, read_artifact")
+    # ── plan_itinerary ──────────────────────────────────────────────────
+    @server.tool(
+        name="plan_itinerary",
+        description="基于 POI 列表生成结构化多日行程草案（简单均分版，精细规划请用 smart_plan_itinerary）。",
+    )
+    async def mcp_plan_itinerary(
+        mcp_ctx: Context[ServerSession, object],
+        city: Annotated[str, Field(description="目标城市名称")],
+        days: Annotated[int, Field(description="行程天数")],
+        pois: Annotated[list, Field(description="POI 列表，每项含 name/longitude/latitude 等字段")],
+        preference: Annotated[str, Field(description="游览偏好描述，例如 '历史文化'")] = "",
+    ) -> dict:
+        store = _get_store(mcp_ctx, cfg)
+        try:
+            from travel_agent.nodes.core_nodes.plan_itinerary import plan_itinerary_tool
+            result = plan_itinerary_tool.invoke({"city": city, "days": days, "pois": pois, "preference": preference})
+            meta = store.save_result(node_id="plan_itinerary", payload=result, summary=f"行程草案: {city} {days}天")
+            return {"artifact_id": meta.artifact_id, "result": result, "isError": False}
+        except Exception as exc:
+            logger.error("[MCP plan_itinerary] %s", traceback.format_exc())
+            return {"artifact_id": "", "result": str(exc), "isError": True}
+
+    # ── smart_plan_itinerary ────────────────────────────────────────────
+    @server.tool(
+        name="smart_plan_itinerary",
+        description="智能行程分组：K-means 地理聚类 + 节奏控制，把景点/酒店/餐厅科学分配到各天。",
+    )
+    async def mcp_smart_plan_itinerary(
+        mcp_ctx: Context[ServerSession, object],
+        spots: Annotated[list, Field(description="景点列表，每项含 name/longitude/latitude")],
+        hotels: Annotated[list, Field(description="酒店列表")],
+        restaurants: Annotated[list, Field(description="餐厅列表")],
+        days: Annotated[int, Field(description="总天数")],
+        city: Annotated[str, Field(description="城市名称")] = "",
+        title: Annotated[str, Field(description="行程标题")] = "",
+        weather_summary: Annotated[str, Field(description="天气概况，用于识别雨天")] = "",
+        pace: Annotated[str, Field(description="节奏: relaxed/standard/intensive")] = "standard",
+    ) -> dict:
+        store = _get_store(mcp_ctx, cfg)
+        try:
+            from travel_agent.nodes.core_nodes.smart_plan_itinerary import smart_plan_itinerary_tool
+            result = smart_plan_itinerary_tool.invoke({
+                "spots": spots, "hotels": hotels, "restaurants": restaurants,
+                "days": days, "city": city, "title": title,
+                "weather_summary": weather_summary, "pace": pace,
+            })
+            meta = store.save_result(node_id="smart_plan_itinerary", payload=result, summary=f"智能行程: {city} {days}天")
+            return {"artifact_id": meta.artifact_id, "result": result, "isError": False}
+        except Exception as exc:
+            logger.error("[MCP smart_plan_itinerary] %s", traceback.format_exc())
+            return {"artifact_id": "", "result": str(exc), "isError": True}
+
+    # ── estimate_budget ─────────────────────────────────────────────────
+    @server.tool(
+        name="estimate_budget",
+        description="粗略估算旅行预算，返回每日花费和总花费估算。",
+    )
+    async def mcp_estimate_budget(
+        mcp_ctx: Context[ServerSession, object],
+        days: Annotated[int, Field(description="行程天数")],
+        city_level: Annotated[str, Field(description="城市等级: A（一线）/B（二线）/C（三线）")] = "A",
+        hotel_level: Annotated[str, Field(description="酒店档次: budget/mid/luxury")] = "mid",
+        with_flight: Annotated[bool, Field(description="是否含往返机票")] = True,
+    ) -> dict:
+        store = _get_store(mcp_ctx, cfg)
+        try:
+            from travel_agent.nodes.core_nodes.estimate_budget import estimate_budget_tool
+            result = estimate_budget_tool.invoke({"days": days, "city_level": city_level, "hotel_level": hotel_level, "with_flight": with_flight})
+            meta = store.save_result(node_id="estimate_budget", payload=result, summary=f"预算估算: {days}天 {city_level}级城市")
+            return {"artifact_id": meta.artifact_id, "result": result, "isError": False}
+        except Exception as exc:
+            logger.error("[MCP estimate_budget] %s", traceback.format_exc())
+            return {"artifact_id": "", "result": str(exc), "isError": True}
+
+    # ── recommend_transport ─────────────────────────────────────────────
+    @server.tool(
+        name="recommend_transport",
+        description="根据距离和城市给出交通方式建议（步行/骑行/地铁/城际）。",
+    )
+    async def mcp_recommend_transport(
+        mcp_ctx: Context[ServerSession, object],
+        distance_km: Annotated[float, Field(description="距离（千米）")],
+        city: Annotated[str, Field(description="所在城市")],
+    ) -> dict:
+        store = _get_store(mcp_ctx, cfg)
+        try:
+            from travel_agent.nodes.core_nodes.recommend_transport import recommend_transport_tool
+            result = recommend_transport_tool.invoke({"distance_km": distance_km, "city": city})
+            meta = store.save_result(node_id="recommend_transport", payload=result, summary=f"交通建议: {city} {distance_km}km")
+            return {"artifact_id": meta.artifact_id, "result": result, "isError": False}
+        except Exception as exc:
+            logger.error("[MCP recommend_transport] %s", traceback.format_exc())
+            return {"artifact_id": "", "result": str(exc), "isError": True}
+
+    # ── format_itinerary ────────────────────────────────────────────────
+    @server.tool(
+        name="format_itinerary",
+        description="将已收集的旅行数据整理成结构化 Markdown 格式行程报告（调用 LLM 生成）。",
+    )
+    async def mcp_format_itinerary(
+        mcp_ctx: Context[ServerSession, object],
+        city: Annotated[str, Field(description="目标城市名称")],
+        days: Annotated[int, Field(description="行程天数")],
+        travelers: Annotated[int, Field(description="出行人数")] = 2,
+        budget: Annotated[str, Field(description="预算描述，如 '500元/天'")] = "适中",
+        raw_data: Annotated[str, Field(description="各工具返回的数据汇总（JSON 字符串或文本）")] = "",
+    ) -> dict:
+        store = _get_store(mcp_ctx, cfg)
+        try:
+            from travel_agent.nodes.core_nodes.format_itinerary import format_itinerary_tool
+            result = await format_itinerary_tool.ainvoke({"city": city, "days": days, "travelers": travelers, "budget": budget, "raw_data": raw_data})
+            meta = store.save_result(node_id="format_itinerary", payload=result, summary=f"行程报告: {city} {days}天")
+            return {"artifact_id": meta.artifact_id, "result": result, "isError": False}
+        except Exception as exc:
+            logger.error("[MCP format_itinerary] %s", traceback.format_exc())
+            return {"artifact_id": "", "result": str(exc), "isError": True}
+
+    # ── render_map_pois ─────────────────────────────────────────────────
+    @server.tool(
+        name="render_map_pois",
+        description="将 POI 列表打包为前端地图可渲染的标记数据（不调用外部 API）。",
+    )
+    async def mcp_render_map_pois(
+        mcp_ctx: Context[ServerSession, object],
+        items: Annotated[list, Field(description="POI 列表，每项含 name/longitude/latitude/type")],
+        title: Annotated[Optional[str], Field(description="标注组标题")] = None,
+    ) -> dict:
+        store = _get_store(mcp_ctx, cfg)
+        try:
+            from travel_agent.nodes.core_nodes.render_map import render_map_pois_tool
+            result = render_map_pois_tool.invoke({"items": items, "title": title})
+            meta = store.save_result(node_id="render_map_pois", payload=result, summary=f"地图渲染: {len(items)} 个 POI")
+            return {"artifact_id": meta.artifact_id, "result": result, "isError": False}
+        except Exception as exc:
+            logger.error("[MCP render_map_pois] %s", traceback.format_exc())
+            return {"artifact_id": "", "result": str(exc), "isError": True}
+
+    # ── render_map_route ────────────────────────────────────────────────
+    @server.tool(
+        name="render_map_route",
+        description="将路线折线坐标打包为前端地图可渲染的路线数据。",
+    )
+    async def mcp_render_map_route(
+        mcp_ctx: Context[ServerSession, object],
+        polyline: Annotated[list, Field(description="折线坐标列表，每项为 [lng, lat]")],
+        origin: Annotated[str, Field(description="出发地名称")] = "",
+        destination: Annotated[str, Field(description="目的地名称")] = "",
+        distance_km: Annotated[Optional[float], Field(description="距离（千米）")] = None,
+        duration_min: Annotated[Optional[float], Field(description="时长（分钟）")] = None,
+    ) -> dict:
+        store = _get_store(mcp_ctx, cfg)
+        try:
+            from travel_agent.nodes.core_nodes.render_map import render_map_route_tool
+            result = render_map_route_tool.invoke({"polyline": polyline, "origin": origin, "destination": destination, "distance_km": distance_km, "duration_min": duration_min})
+            meta = store.save_result(node_id="render_map_route", payload=result, summary=f"路线渲染: {origin}→{destination}")
+            return {"artifact_id": meta.artifact_id, "result": result, "isError": False}
+        except Exception as exc:
+            logger.error("[MCP render_map_route] %s", traceback.format_exc())
+            return {"artifact_id": "", "result": str(exc), "isError": True}
+
+    # ── render_itinerary ────────────────────────────────────────────────
+    @server.tool(
+        name="render_itinerary",
+        description="将完整行程规划打包为地图可渲染的有序景点数据，前端按天分组标注并连线。",
+    )
+    async def mcp_render_itinerary(
+        mcp_ctx: Context[ServerSession, object],
+        days: Annotated[list, Field(description="每天安排列表，每项含 day/label/spots")],
+        city: Annotated[str, Field(description="城市名称")] = "",
+        title: Annotated[str, Field(description="行程标题")] = "",
+    ) -> dict:
+        store = _get_store(mcp_ctx, cfg)
+        try:
+            from travel_agent.nodes.core_nodes.render_itinerary import render_itinerary_tool
+            result = render_itinerary_tool.invoke({"days": days, "city": city, "title": title})
+            meta = store.save_result(node_id="render_itinerary", payload=result, summary=f"行程渲染: {city}")
+            return {"artifact_id": meta.artifact_id, "result": result, "isError": False}
+        except Exception as exc:
+            logger.error("[MCP render_itinerary] %s", traceback.format_exc())
+            return {"artifact_id": "", "result": str(exc), "isError": True}
+
+    # ── validate_json ───────────────────────────────────────────────────
+    @server.tool(
+        name="validate_json",
+        description="检查字符串是否为合法 JSON。",
+    )
+    async def mcp_validate_json(
+        mcp_ctx: Context[ServerSession, object],
+        payload: Annotated[str, Field(description="待检查的字符串")],
+    ) -> dict:
+        try:
+            from travel_agent.nodes.core_nodes.json_tools import validate_json_tool
+            result = validate_json_tool.invoke({"payload": payload})
+            return {"artifact_id": "", "result": result, "isError": False}
+        except Exception as exc:
+            logger.error("[MCP validate_json] %s", traceback.format_exc())
+            return {"artifact_id": "", "result": str(exc), "isError": True}
+
+    # ── fix_json ────────────────────────────────────────────────────────
+    @server.tool(
+        name="fix_json",
+        description="利用 LLM 对接近 JSON 但不合法的文本进行纠错。",
+    )
+    async def mcp_fix_json(
+        mcp_ctx: Context[ServerSession, object],
+        raw_text: Annotated[str, Field(description="原始字符串（可能含多余说明、尾逗号等）")],
+        instruction: Annotated[str, Field(description="可选 schema 提示")] = "",
+    ) -> dict:
+        try:
+            from travel_agent.nodes.core_nodes.json_tools import fix_json_tool
+            result = await fix_json_tool.ainvoke({"raw_text": raw_text, "instruction": instruction})
+            return {"artifact_id": "", "result": result, "isError": False}
+        except Exception as exc:
+            logger.error("[MCP fix_json] %s", traceback.format_exc())
+            return {"artifact_id": "", "result": str(exc), "isError": True}
+
+    logger.info("[MCP] registered all 14 travel tools")

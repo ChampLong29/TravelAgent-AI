@@ -26,3 +26,15 @@ provider = "amap"
 api_key = "YOUR_AMAP_WEB_SERVICE_KEY"
 base_url = "https://restapi.amap.com"
 
+# MCP Server 配置（FastAPI 启动时会在后台自动拉起，无需手动启动）
+[mcp_server]
+server_name = "travel"
+server_cache_dir = ".travel/.server_cache"
+server_transport = "streamable-http"  # 传输协议，固定使用 streamable-http
+url_scheme = "http"
+connect_host = "127.0.0.1"
+port = 8002          # MCP Server 监听端口，与 FastAPI 主端口（8000）不同
+path = "/mcp"        # MCP 挂载路径
+json_response = true
+stateless_http = false
+timeout = 300        # 工具调用超时（秒）

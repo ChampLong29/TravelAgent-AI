@@ -5,6 +5,7 @@ import os
 import sys
 import time
 import uuid
+from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any, Dict, Optional
 
@@ -248,7 +249,56 @@ def _extract_map_blocks(messages: list) -> str:
     return "".join(blocks)
 
 
-app = FastAPI(title="Travel Smart Assistant")
+# ── MCP Server 后台任务 ────────────────────────────────────────────────────
+_mcp_server_task: Optional[asyncio.Task] = None
+
+
+async def _run_mcp_server(cfg) -> None:
+    """在后台 asyncio task 中启动 MCP Server（streamable-http 模式）。"""
+    from travel_agent.mcp.server import create_server
+    import uvicorn
+
+    mcp_server = create_server(cfg)
+    # FastMCP.streamable_http_app() 返回 Starlette ASGI app，挂载到独立 uvicorn 实例
+    mcp_asgi = mcp_server.streamable_http_app()
+    uv_cfg = uvicorn.Config(
+        app=mcp_asgi,
+        host=cfg.mcp_server.connect_host,
+        port=cfg.mcp_server.port,
+        log_level="warning",
+    )
+    server = uvicorn.Server(uv_cfg)
+    logger.info(
+        "[MCP] Server starting on %s:%s%s",
+        cfg.mcp_server.connect_host,
+        cfg.mcp_server.port,
+        cfg.mcp_server.path,
+    )
+    await server.serve()
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """启动时拉起 MCP Server；关闭时取消 task。"""
+    cfg = load_settings(CONFIG_PATH)
+    global _mcp_server_task
+    _mcp_server_task = asyncio.create_task(_run_mcp_server(cfg))
+    # 等待一小段时间让 MCP Server 完成绑定，再接受 WebSocket 连接
+    await asyncio.sleep(1.5)
+    logger.info("[FastAPI] MCP Server task started")
+    try:
+        yield
+    finally:
+        if _mcp_server_task and not _mcp_server_task.done():
+            _mcp_server_task.cancel()
+            try:
+                await _mcp_server_task
+            except asyncio.CancelledError:
+                pass
+        logger.info("[FastAPI] MCP Server task stopped")
+
+
+app = FastAPI(title="Travel Smart Assistant", lifespan=lifespan)
 
 
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
