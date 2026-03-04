@@ -1,0 +1,625 @@
+html, body {
+  height: 100%;
+  margin: 0;
+  padding: 0;
+}
+
+.layout {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+
+.header {
+  padding: 12px 20px;
+  border-bottom: 1px solid #e5e7eb;
+  background: #ffffffcc;
+  backdrop-filter: blur(10px);
+}
+
+.header h1 {
+  margin: 0;
+  font-size: 20px;
+}
+
+.header p {
+  margin: 4px 0 0;
+  color: #6b7280;
+  font-size: 13px;
+}
+
+.main {
+  flex: 1;
+  min-height: 0;          /* 让 flex 子元素可以收缩，防止撑破父容器 */
+  overflow: hidden;
+  display: grid;
+  grid-template-columns: 1.1fr 1fr;
+  grid-template-rows: 1fr;   /* grid 行高撑满，子列自动继承高度 */
+  gap: 12px;
+  padding: 12px;
+  background: #f3f4f6;
+}
+
+.chat-panel,
+.map-panel {
+  background: #ffffff;
+  border-radius: 12px;
+  box-shadow: 0 10px 30px rgba(15, 23, 42, 0.06);
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;       /* 关键：让 flex:1 子元素能收缩 */
+  overflow: hidden;
+}
+
+.chat-log {
+  flex: 1;
+  overflow-y: auto;
+  padding: 8px;
+  border-radius: 8px;
+  background: #f9fafb;
+  position: relative;
+}
+
+/* 无对话时显示占位提示 */
+.chat-log:empty::before {
+  content: attr(data-placeholder);
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  color: #9ca3af;
+  font-size: 14px;
+  line-height: 1.8;
+  padding: 24px;
+  pointer-events: none;
+  white-space: pre-line;
+}
+
+.chat-msg {
+  padding: 6px 8px;
+  margin-bottom: 4px;
+  border-radius: 6px;
+  font-size: 14px;
+  line-height: 1.4;
+}
+
+.chat-msg-user {
+  background: #dbeafe;
+  align-self: flex-end;
+}
+
+.chat-msg-assistant {
+  background: #e5e7eb;
+  align-self: flex-start;
+}
+
+.chat-input-row {
+  display: flex;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.chat-input {
+  flex: 1;
+  padding: 8px 10px;
+  border-radius: 999px;
+  border: 1px solid #d1d5db;
+  font-size: 14px;
+}
+
+.btn-primary {
+  padding: 8px 14px;
+  border-radius: 999px;
+  border: none;
+  background: linear-gradient(135deg, #4f46e5, #06b6d4);
+  color: #ffffff;
+  font-size: 14px;
+  cursor: pointer;
+}
+
+.btn-primary:hover {
+  opacity: 0.9;
+}
+
+.btn-secondary {
+  padding: 8px 10px;
+  border-radius: 999px;
+  border: 1px solid #d1d5db;
+  background: #f3f4f6;
+  color: #6b7280;
+  font-size: 14px;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.btn-secondary:hover {
+  background: #fee2e2;
+  border-color: #fca5a5;
+  color: #dc2626;
+}
+
+
+/* ── Chat message structure ──────────────────────────────────────────────── */
+.chat-msg {
+  display: flex;
+  flex-direction: column;
+  padding: 6px 8px;
+  margin-bottom: 6px;
+  border-radius: 8px;
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+.chat-msg-label {
+  font-size: 11px;
+  font-weight: 600;
+  color: #6b7280;
+  margin-bottom: 3px;
+}
+
+.chat-msg-body {
+  word-break: break-word;
+}
+
+/* Markdown content inside assistant bubbles */
+.chat-msg-body h1, .chat-msg-body h2, .chat-msg-body h3 {
+  margin: 8px 0 4px;
+  font-size: 1em;
+  font-weight: 700;
+}
+
+.chat-msg-body p {
+  margin: 3px 0;
+}
+
+.chat-msg-body ul, .chat-msg-body ol {
+  margin: 4px 0;
+  padding-left: 18px;
+}
+
+.chat-msg-body code {
+  background: #f1f5f9;
+  padding: 1px 4px;
+  border-radius: 4px;
+  font-family: monospace;
+  font-size: 12px;
+}
+
+.chat-msg-body pre {
+  background: #f1f5f9;
+  padding: 8px;
+  border-radius: 6px;
+  overflow-x: auto;
+  font-size: 12px;
+}
+
+.chat-msg-body table {
+  border-collapse: collapse;
+  width: 100%;
+  font-size: 12px;
+}
+
+.chat-msg-body th, .chat-msg-body td {
+  border: 1px solid #d1d5db;
+  padding: 4px 8px;
+}
+
+/* ── Typing indicator ────────────────────────────────────────────────── */
+.typing {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 8px 12px;
+}
+
+.dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #9ca3af;
+  animation: bounce 1.2s infinite;
+}
+
+.dot:nth-child(2) { animation-delay: 0.2s; }
+.dot:nth-child(3) { animation-delay: 0.4s; }
+
+@keyframes bounce {
+  0%, 80%, 100% { transform: translateY(0); }
+  40%            { transform: translateY(-6px); }
+}
+
+/* ── Map labels ──────────────────────────────────────────────────────── */
+.map-marker-emoji {
+  font-size: 24px;
+  line-height: 1;
+  filter: drop-shadow(0 1px 3px rgba(0,0,0,.35));
+  cursor: pointer;
+}
+
+.map-popup strong {
+  font-size: 13px;
+}
+
+/* ── Map toolbar ───────────────────────────────────────────────────── */
+.map-toolbar {
+  display: flex;
+  gap: 6px;
+  flex-shrink: 0;
+  margin-bottom: 6px;
+}
+
+.map-btn {
+  padding: 4px 10px;
+  border-radius: 999px;
+  border: 1px solid #d1d5db;
+  background: #ffffff;
+  font-size: 12px;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+.map-btn:hover {
+  background: #f3f4f6;
+}
+
+/* ── Info panel ─────────────────────────────────────────────────────── */
+.info-panel {
+  position: absolute;  /* 相对于 .map-wrap */
+  top: 10px;
+  right: 10px;
+  width: 240px;
+  max-height: 320px;
+  background: #ffffff;
+  border-radius: 10px;
+  box-shadow: 0 4px 20px rgba(0,0,0,.18);
+  display: none;
+  flex-direction: column;
+  z-index: 9999;
+  overflow: hidden;
+}
+
+.info-panel-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 12px;
+  border-bottom: 1px solid #e5e7eb;
+  background: #f9fafb;
+}
+
+.info-panel-header h3 {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 600;
+  flex: 1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.info-panel-close {
+  background: none;
+  border: none;
+  font-size: 16px;
+  cursor: pointer;
+  color: #6b7280;
+  padding: 0 0 0 8px;
+  line-height: 1;
+}
+
+.info-panel-body {
+  padding: 10px 12px;
+  font-size: 13px;
+  overflow-y: auto;
+  flex: 1;
+}
+
+.info-panel-body p {
+  margin: 4px 0;
+}
+
+.amap-nav-link {
+  display: inline-block;
+  margin-top: 8px;
+  padding: 4px 10px;
+  border-radius: 6px;
+  background: linear-gradient(135deg, #4f46e5, #06b6d4);
+  color: #ffffff;
+  text-decoration: none;
+  font-size: 12px;
+}
+
+.amap-nav-link:hover {
+  opacity: 0.85;
+}
+
+/* ── POI 图片 ────────────────────────────────────────────────────────── */
+.poi-photos {
+  display: flex;
+  gap: 6px;
+  overflow-x: auto;
+  margin-bottom: 8px;
+  scrollbar-width: thin;
+}
+.poi-photos::-webkit-scrollbar { height: 4px; }
+.poi-photos::-webkit-scrollbar-thumb { background: #d1d5db; border-radius: 2px; }
+
+.poi-photo {
+  width: 90px;
+  height: 68px;
+  object-fit: cover;
+  border-radius: 6px;
+  flex-shrink: 0;
+  cursor: pointer;
+  transition: transform 0.15s;
+}
+.poi-photo:hover { transform: scale(1.05); }
+
+/* ── Weather bar ─────────────────────────────────────────────────────── */
+.weather-bar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  margin-bottom: 6px;
+  background: linear-gradient(90deg, #e0f2fe, #f0fdf4);
+  border-radius: 8px;
+  overflow-x: auto;
+  flex-shrink: 0;
+  scrollbar-width: none;
+}
+
+.weather-bar::-webkit-scrollbar { display: none; }
+
+.weather-city {
+  font-size: 12px;
+  font-weight: 600;
+  color: #0369a1;
+  white-space: nowrap;
+  padding-right: 8px;
+  border-right: 1px solid #bae6fd;
+  margin-right: 4px;
+}
+
+.weather-day {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 4px 8px;
+  border-radius: 6px;
+  background: #ffffffcc;
+  min-width: 72px;
+  gap: 2px;
+  font-size: 11px;
+  color: #374151;
+  border: 1px solid #e0f2fe;
+}
+
+.weather-date  { font-weight: 600; color: #0369a1; }
+.weather-icon  { font-size: 18px; line-height: 1; }
+.weather-desc  { color: #6b7280; }
+.weather-temp  { font-weight: 700; color: #111827; }
+.weather-wind  { color: #9ca3af; font-size: 10px; }
+
+@media (max-width: 960px) {
+  .main {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* ─────────────────────────────────────────────────────────────────────────
+   Map + side panel layout
+───────────────────────────────────────────────────────────────────────── */
+.map-and-side {
+  display: flex;
+  flex: 1;              /* 占据 map-panel 剩余高度 */
+  min-height: 0;        /* 防止内容撑破 */
+  align-items: stretch;
+  gap: 6px;
+  overflow: hidden;
+}
+
+/* 地图包裹层：撑满宽度，提供 position:relative 给 info-panel 悬浮定位 */
+.map-wrap {
+  flex: 1;
+  min-width: 0;
+  position: relative;
+  display: flex;        /* 让 .map-container 能用 flex:1 撑满 */
+  flex-direction: column;
+}
+
+.map-container {
+  width: 100%;
+  border-radius: 8px;
+  overflow: hidden;
+  /* 高度由 JS ResizeObserver 动态设定，不依赖 flex 传递 */
+}
+
+/* ── Side panel ──────────────────────────────────────────────────────── */
+.side-panel {
+  width: 260px;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;        /* 关键：flex 子元素需要 min-height:0 才能收缩 */
+  background: #ffffff;
+  border-radius: 10px;
+  border: 1px solid #e5e7eb;
+  overflow: hidden;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.08);
+}
+
+.side-panel-tabs {
+  display: flex;
+  border-bottom: 1px solid #e5e7eb;
+  background: #f9fafb;
+  flex-shrink: 0;
+}
+
+.side-tab {
+  flex: 1;
+  padding: 8px 4px;
+  font-size: 12px;
+  font-weight: 500;
+  border: none;
+  border-bottom: 2px solid transparent;
+  background: none;
+  cursor: pointer;
+  color: #6b7280;
+  transition: color 0.15s, border-color 0.15s;
+}
+
+.side-tab.active {
+  color: #4f46e5;
+  border-bottom: 2px solid #4f46e5;
+  font-weight: 700;
+  background: #fff;
+}
+
+.side-tab:hover:not(.active) { color: #374151; background: #f3f4f6; }
+
+.side-panel-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 8px;
+  scrollbar-width: thin;
+  scrollbar-color: #d1d5db transparent;
+}
+.side-panel-body::-webkit-scrollbar { width: 4px; }
+.side-panel-body::-webkit-scrollbar-thumb { background: #d1d5db; border-radius: 2px; }
+
+.side-empty {
+  padding: 16px;
+  text-align: center;
+  color: #9ca3af;
+  font-size: 13px;
+}
+
+/* ── Itinerary day block ─────────────────────────────────────────────── */
+.itinerary-title {
+  font-size: 13px;
+  font-weight: 700;
+  color: #111827;
+  padding: 4px 6px 8px;
+  border-bottom: 1px solid #f3f4f6;
+  margin-bottom: 6px;
+}
+
+.day-block {
+  margin-bottom: 12px;
+}
+
+.day-label {
+  font-size: 12px;
+  font-weight: 700;
+  color: #374151;
+  padding: 4px 8px;
+  margin-bottom: 5px;
+  background: #f9fafb;
+  border-radius: 4px;
+}
+
+.day-sub-label {
+  font-size: 11px;
+  color: #9ca3af;
+  font-weight: 600;
+  padding: 4px 4px 2px;
+}
+
+/* ── POI card ────────────────────────────────────────────────────────── */
+.poi-card {
+  display: flex;
+  gap: 8px;
+  padding: 7px;
+  margin-bottom: 5px;
+  border-radius: 8px;
+  background: #f9fafb;
+  cursor: pointer;
+  transition: background 0.15s, box-shadow 0.15s;
+  border: 1px solid transparent;
+}
+
+.poi-card:hover {
+  background: #eff6ff;
+  border-color: #bfdbfe;
+  box-shadow: 0 1px 4px rgba(79,70,229,0.1);
+}
+
+.poi-card-img {
+  width: 60px;
+  height: 52px;
+  object-fit: cover;
+  border-radius: 6px;
+  flex-shrink: 0;
+  background: #e5e7eb;
+}
+
+.poi-card-body {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.poi-card-num {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  color: #fff;
+  font-size: 11px;
+  font-weight: 700;
+  flex-shrink: 0;
+  margin-right: 4px;
+  vertical-align: middle;
+}
+
+.poi-card-name {
+  font-size: 13px;
+  font-weight: 600;
+  color: #111827;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.poi-card-meta {
+  font-size: 11px;
+  color: #6b7280;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  flex-wrap: wrap;
+}
+
+.poi-card-day   { font-size: 10px; color: #9ca3af; }
+.poi-card-addr  { font-size: 11px; color: #9ca3af; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.poi-card-note  { font-size: 11px; color: #6b7280; }
+
+/* ── Numbered map pin (行程编号气泡) ──────────────────────────────────── */
+.itinerary-pin {
+  width: 28px;
+  height: 28px;
+  border-radius: 50% 50% 50% 0;
+  transform: rotate(-45deg);
+  color: #fff;
+  font-size: 12px;
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 0 2px 6px rgba(0,0,0,0.3);
+  border: 2px solid rgba(255,255,255,0.85);
+}
+
+.itinerary-pin > * {
+  transform: rotate(45deg);
+}
+

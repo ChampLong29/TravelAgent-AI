@@ -1,0 +1,87 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <title>智能旅行助手</title>
+    <link rel="stylesheet" href="/static/style.css" />
+    <!-- Marked.js for Markdown rendering -->
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+    <!-- 高德地图 JS API v2.0 -->
+    <script
+      type="text/javascript"
+      src="https://webapi.amap.com/maps?v=2.0&key=YOUR_AMAP_JSAPI_KEY"
+    ></script>
+  </head>
+  <body>
+    <div class="layout">
+      <header class="header">
+        <h1>🗺️ 智能旅行助手</h1>
+        <p>AI 驱动的旅行规划 · 景点搜索 · 路线规划 · 天气查询</p>
+      </header>
+
+      <main class="main">
+        <!-- 左侧：对话区 -->
+        <section class="chat-panel">
+          <div id="chat-log" class="chat-log" data-placeholder="💬 试试问我：
+帮我规划一个 3 天的成都美食+景点之旅
+
+或者：
+北京故宫附近有什么推荐的酒店？"></div>
+          <div class="chat-input-row">
+            <input
+              id="chat-input"
+              class="chat-input"
+              type="text"
+              placeholder="输入消息，按 Enter 发送"
+            />
+            <button id="send-btn" class="btn-primary">发送</button>
+            <button class="btn-secondary" onclick="clearHistory()" title="清除对话记录">🗑</button>
+          </div>
+        </section>
+
+        <!-- 右侧：地图 + 信息面板 -->
+        <section class="map-panel">
+          <!-- 天气卡片（有天气数据时显示） -->
+          <div id="weather-bar" class="weather-bar" style="display:none;"></div>
+
+          <!-- 工具栏（顶部，不占弹性高度） -->
+          <div class="map-toolbar">
+            <button class="map-btn" onclick="clearMapMarkers()">🗑 清除</button>
+            <button class="map-btn" onclick="fitMapBounds()">⛶ 适应视图</button>
+            <button class="map-btn" id="toggle-side-btn" onclick="toggleSidePanel()" style="display:none;">📋 列表</button>
+          </div>
+
+          <!-- 地图区域（弹性撑满剩余高度） -->
+          <div class="map-and-side">
+
+            <!-- 地图 + 悬浮 info-panel 包裹层 -->
+            <div class="map-wrap">
+              <div id="map" class="map-container"></div>
+              <!-- POI 信息面板（悬浮在地图右上角） -->
+              <div id="info-panel" class="info-panel" style="display:none;">
+                <div class="info-panel-header">
+                  <span id="info-panel-title">📍 地点详情</span>
+                  <button class="info-panel-close" onclick="document.getElementById('info-panel').style.display='none'">✕</button>
+                </div>
+                <div id="info-panel-body" class="info-panel-body"></div>
+              </div>
+            </div>
+
+            <!-- 侧边卡片抽屉：行程/住宿/餐厅 -->
+            <div id="side-panel" class="side-panel" style="display:none;">
+              <div class="side-panel-tabs">
+                <button class="side-tab active" data-tab="itinerary">🗓️ 行程</button>
+                <button class="side-tab" data-tab="hotel">🏨 住宿</button>
+                <button class="side-tab" data-tab="restaurant">🍜 餐厅</button>
+              </div>
+              <div id="side-panel-body" class="side-panel-body"></div>
+            </div>
+
+          </div>
+        </section>
+      </main>
+    </div>
+
+    <script src="/static/app.js"></script>
+  </body>
+</html>

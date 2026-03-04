@@ -1,0 +1,28 @@
+[developer]
+developer_mode = true
+default_llm = "deepseek-chat"
+
+[project]
+data_dir = "./travel_data"
+outputs_dir = "./travel_outputs"
+
+[llm]
+model = "deepseek-chat"
+base_url = "https://api.deepseek.com"
+api_key = "YOUR_DEEPSEEK_API_KEY" # 请前往大模型平台申请 API Key
+timeout = 30.0
+
+[map]
+provider = "amap"
+# 后端 REST 调用（POI搜索 / 路线规划）使用 「Web服务」类型 Key
+api_key = "YOUR_AMAP_WEB_SERVICE_KEY"
+base_url = "https://restapi.amap.com"
+# 前端地图 JS SDK 使用 「Web端（JS API）」类型 Key，同时在 web/index.html 的 <script src> 里填写
+jsapi_key = "YOUR_AMAP_JSAPI_KEY"
+
+[weather]
+provider = "amap"
+# 天气查询与 Map 共用同一个 Web服务 Key
+api_key = "YOUR_AMAP_WEB_SERVICE_KEY"
+base_url = "https://restapi.amap.com"
+

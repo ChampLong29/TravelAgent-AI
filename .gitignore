@@ -1,0 +1,43 @@
+# ===========================
+# ⚠️  含真实 API Key，绝不提交
+# ===========================
+config.toml
+
+# 虚拟环境
+.venv/
+venv/
+env/
+
+# Python 编译产物
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.so
+*.egg
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# 运行时数据 / 输出产物
+travel_data/
+travel_outputs/
+artifacts/
+*.log
+tmp/
+.tmp/
+
+# uv 工具缓存
+.uv/
+
+# IDE & 系统
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# 环境变量文件
+.env
+.env.*
+!.env.example
