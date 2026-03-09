@@ -187,3 +187,81 @@ class ArtifactStore:
             except Exception as exc:
                 logger.warning("[ArtifactStore] failed to load %s: %s", meta.artifact_id, exc)
         return snapshot
+
+    def build_context_prompt(self, lang: str = "zh") -> str:
+        """
+        三层记忆 L2：将本 session 已收集的工具结果快照转换为可注入
+        system prompt 的文本段落。
+
+        只展示对规划决策有价值的节点（排除纯渲染类工具），
+        payload 超长时截断，避免撑爆 context window。
+
+        Parameters
+        ----------
+        lang:
+            输出语言，"zh" 或 "en"。
+
+        Returns
+        -------
+        str
+            可直接拼入 system prompt 的文本，若无已收集数据则返回空字符串。
+        """
+        # 渲染类工具的结果不需要注入（前端消费，LLM 无需重读）
+        _SKIP_NODES = {
+            "render_map_pois", "render_map_route", "render_itinerary",
+            "validate_json", "fix_json",
+        }
+        # 每个节点 payload 最大字符数（防止过长）
+        _MAX_PAYLOAD_CHARS = 600
+
+        snapshot = self.context_snapshot()
+        if not snapshot:
+            return ""
+
+        lines: list[str] = []
+        for node_id, info in snapshot.items():
+            if node_id in _SKIP_NODES:
+                continue
+            summary = info.get("summary") or ""
+            payload = info.get("payload")
+            artifact_id = info.get("artifact_id", "")
+
+            # 序列化 payload
+            if payload is None:
+                payload_str = ""
+            elif isinstance(payload, str):
+                payload_str = payload
+            else:
+                try:
+                    payload_str = json.dumps(payload, ensure_ascii=False)
+                except Exception:
+                    payload_str = str(payload)
+
+            if len(payload_str) > _MAX_PAYLOAD_CHARS:
+                payload_str = payload_str[:_MAX_PAYLOAD_CHARS] + "…（已截断）"
+
+            if lang == "zh":
+                lines.append(
+                    f"- **{node_id}**（artifact_id: `{artifact_id}`）\n"
+                    f"  摘要: {summary}\n"
+                    f"  数据: {payload_str}"
+                )
+            else:
+                lines.append(
+                    f"- **{node_id}** (artifact_id: `{artifact_id}`)\n"
+                    f"  Summary: {summary}\n"
+                    f"  Data: {payload_str}"
+                )
+
+        if not lines:
+            return ""
+
+        header = (
+            "## 本次会话已收集的旅行数据（工具执行结果）\n"
+            "以下数据已通过工具调用获取，规划时请直接引用，无需重复查询：\n"
+            if lang == "zh"
+            else "## Travel data collected in this session\n"
+                 "The following data has been retrieved via tools. "
+                 "Use it directly without re-querying:\n"
+        )
+        return header + "\n".join(lines)

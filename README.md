@@ -1,6 +1,6 @@
 # 🗺️ Travel Agent — AI 旅行规划助手
 
-基于 **LangGraph ReAct** 架构的多工具旅行规划 Agent，集成高德地图 API，支持自然语言对话式行程规划、POI 搜索、路线规划、天气查询、预算估算，并在前端实时渲染交互地图。
+基于 **LangGraph ReAct** 架构的多工具旅行规划 Agent，集成高德地图 API，支持自然语言对话式行程规划、POI 搜索、路线规划、天气查询、预算估算，并在前端实时渲染交互地图。新增**三层压缩记忆系统**，实现消息滑动窗口压缩、工具结果上下文注入与跨会话用户偏好持久化。
 
 > 本项目的整体架构（Agent 编排、工具节点体系、配置中心、Skills 扩展机制等）基于 [FireRed-OpenStoryline](https://github.com/FireRedTeam/FireRed-OpenStoryline) 开源框架搭建，并在此基础上针对旅行场景进行了定制开发。
 
@@ -25,7 +25,7 @@
 | 💬 **对话历史** | localStorage 持久化聊天记录 |
 | 🔌 **MCP 服务** | 将 Agent 工具通过 MCP 协议暴露，可供外部 LLM 客户端调用 |
 | 🧩 **Skills 扩展** | Markdown 格式的可插拔 Skill，无需改代码即可扩展 Agent 能力 |
-| 🧠 **会话记忆** | 多轮对话跨会话记忆，工具调用结果持久化到 artifacts |
+| 🧠 **三层压缩记忆** | L1 消息滑动窗口+LLM摘要压缩 / L2 工具结果 snapshot 注入 / L3 跨 session 用户偏好持久化 |
 
 ---
 
@@ -86,7 +86,7 @@
 
 ```
 travel/
-├── agent_fastapi.py              # FastAPI 服务入口（含 SSE 流式推送）
+├── agent_fastapi.py              # FastAPI 服务入口（含 WebSocket 推送 + 三层记忆调度）
 ├── cli.py                        # 命令行交互入口
 ├── build_env.sh                  # 一键创建 uv 虚拟环境脚本
 ├── config.toml                   # ⚠️ 含 API Key，已加入 .gitignore，请勿提交
@@ -119,7 +119,7 @@ travel/
 │
 ├── src/
 │   └── travel_agent/
-│       ├── agent.py              # Agent 构建 & 工具注册
+│       ├── agent.py              # Agent 构建 & 工具注册 & ClientContext（含三层记忆）
 │       ├── config.py             # Pydantic 配置加载
 │       ├── mcp/                  # MCP 服务层（将工具暴露给外部客户端）
 │       │   ├── server.py         # MCP Server 启动入口
@@ -145,7 +145,9 @@ travel/
 │       ├── skills/
 │       │   └── skills_io.py      # Skills 加载 & 热插拔逻辑
 │       ├── storage/
-│       │   ├── agent_memory.py   # 多轮对话记忆管理
+│       │   ├── agent_memory.py   # L2：工具结果持久化 + context_snapshot 注入
+│       │   ├── memory_compressor.py  # L1：消息滑动窗口 + LLM 摘要压缩
+│       │   ├── user_profile.py   # L3：跨 session 用户偏好 / 历史摘要持久化
 │       │   └── session_manager.py# 会话隔离 & 生命周期
 │       └── utils/
 │           ├── prompts.py        # Prompt 加载工具
@@ -258,57 +260,104 @@ builder.render(task="format_itinerary", role="system", lang="zh", days=3, city="
 
 ---
 
-### 记忆功能实现
+### 三层压缩记忆系统
 
-项目实现了两层记忆：
-
-#### 层 1：对话上下文记忆（LangGraph 消息历史）
-
-LangGraph ReAct agent 维护完整的 `messages` 列表，包含每轮的 `HumanMessage`、`AIMessage`、`ToolMessage`。`agent_fastapi.py` 在每次请求时将历史消息传入，LLM 可感知整个对话上下文：
-
-```python
-# agent_fastapi.py
-_clean_messages_for_next_turn(messages)   # 将 list/dict content 序列化为 string
-                                           # （DeepSeek API 要求 content 必须是 string）
-await agent.ainvoke({"messages": messages})
-```
-
-#### 层 2：工具结果持久化（ArtifactStore）
-
-每次工具调用结束后，结果写入本地文件，形成跨请求的持久记忆：
+项目实现了完整的**三层压缩记忆架构**，解决了长对话 token 膨胀、工具数据重复查询、跨会话用户偏好遗忘三大问题：
 
 ```
-调用 search_poi("成都", "武侯祠")
-        │
-        ▼
-ArtifactStore.save_result(
-    node_id    = "search_poi",
-    payload    = { POI 列表 },
-    summary    = "POI 搜索: 武侯祠 @ 成都",
-)
-        │
-        ▼
-artifacts/<session_id>/search_poi/search_poi_3588b6d6.json
-artifacts/<session_id>/meta.json  ← 追加索引记录
+每轮对话
+    │
+    ▼
+┌──────────────────────────────────────────────┐
+│ L1  MemoryCompressor（memory_compressor.py） │
+│  ─ 检查 messages 是否超出阈值                 │
+│    （默认 40 条 或 6000 token 估算）          │
+│  ─ 超出时调用 LLM 将早期消息压缩为一条摘要     │
+│    SystemMessage，替换进 messages 头部        │
+│  ─ LLM 失败时降级为截断策略（保留最近 10 条） │
+│  ─ 摘要持久化到 <session_dir>/summary.json   │
+└─────────────────────┬────────────────────────┘
+                      │ 压缩后的纯对话历史
+                      ▼
+┌──────────────────────────────────────────────┐
+│ L2  ArtifactStore.build_context_prompt()     │
+│    （agent_memory.py）                        │
+│  ─ 读取本 session 所有工具执行结果快照         │
+│  ─ 排除纯渲染类工具（render_map 等）          │
+│  ─ 每条 payload 截断至 600 字符              │
+│  ─ 格式化为 Markdown，注入动态 system prompt  │
+└─────────────────────┬────────────────────────┘
+                      │ 含工具数据的 system prompt
+                      ▼
+┌──────────────────────────────────────────────┐
+│ L3  UserProfileStore（user_profile.py）      │
+│  ─ 跨 session 持久化用户偏好                  │
+│    （城市 / 预算 / 节奏 / 人数 / 菜系偏好）   │
+│  ─ 每轮结束后规则提取 HumanMessage 中的偏好   │
+│  ─ session 断开时将 L1 摘要归档进用户历史     │
+│  ─ 新 session 将偏好 + 近 2 条历史注入        │
+│    system prompt 头部                         │
+│  ─ 存储于 <data_dir>/user_profiles/          │
+└──────────────────────────────────────────────┘
 ```
 
-`context_snapshot()` 方法可将当前会话所有工具的最新结果打包为一个字典，注入到 LLM 提示词或 MCP 响应中，使 LLM 在后续轮次中感知已有数据而无需重复 API 调用。
+**关键设计**：`messages`（纯对话历史）与发给 `ainvoke` 的 `_invoke_input`（含动态 system prompt 的副本）严格分离，每轮从 `raw_messages` 回收时过滤动态 SystemMessage，避免动态 prompt 污染历史记录、导致 L1 摘要无限叠加。
+
+#### L1 可调参数（`build_agent` 中修改）
+
+| 参数 | 默认值 | 含义 |
+|------|--------|------|
+| `max_messages` | `40` | 消息条数超出阈值时触发压缩 |
+| `keep_recent` | `10` | 压缩时保留最近 N 条不参与摘要 |
+| `max_tokens_estimate` | `6000` | token 估算值超出时也触发压缩 |
+
+#### L2：工具结果持久化（ArtifactStore）
+
+每次工具调用结束后，结果自动写入 `artifacts/` 目录，供下一轮对话直接引用：
+
+```
+artifacts/
+└── <session_id>/
+    ├── meta.json              # 本会话所有 artifact 的索引
+    ├── search_poi/
+    │   └── search_poi_<hash>.json
+    ├── check_weather/
+    │   └── check_weather_<hash>.json
+    └── search_hotel/
+        └── search_hotel_<hash>.json
+```
+
+`build_context_prompt()` 读取每个节点的最新结果，格式化后注入 system prompt，让 LLM 在后续轮次直接感知已收集的数据，无需重复调用 API。
+
+#### L3：跨 session 用户画像
+
+```
+<data_dir>/user_profiles/default.json
+
+{
+  "preferred_cities": ["成都", "重庆"],
+  "budget_level": "mid",
+  "travel_pace": "relaxed",
+  "group_size": 2,
+  "cuisine_preferences": ["川菜", "火锅"],
+  "session_summaries": [
+    { "session_id": "...", "summary": "用户规划了成都3天行程...", "created_at": ... }
+  ]
+}
+```
 
 #### 会话隔离与清理（SessionLifecycleManager）
 
 ```python
 mgr = SessionLifecycleManager(
     artifacts_root = "travel_outputs/",
-    cache_root     = ".storyline/.server_cache/",
+    cache_root     = ".travel/.server_cache/",
     retention_days = 3,      # 3 天后自动清理
     max_sessions   = 256,    # 最多保留 256 个会话
 )
-
-store = mgr.get_store(session_id)    # 取或创建当前会话的 ArtifactStore
-mgr.cleanup_expired()                # 删除过期目录（超时 or 超数量）
 ```
 
-每个 WebSocket 连接对应独立 `session_id`，不同用户的 artifacts 目录完全隔离。
+每个 WebSocket 连接对应独立 `session_id`，不同用户数据完全隔离。
 
 ---
 
@@ -592,30 +641,59 @@ uv run python scripts/test_memory.py
 
 ## 🧠 Memory & Storage
 
-Agent 具备**跨多轮对话的工具结果记忆**能力，所有工具调用结果以 JSON 文件持久化到本地，避免重复调用 API。
+Agent 实现了**三层压缩记忆系统**，完整覆盖短期压缩、中期工具感知和长期偏好持久化三个维度。
 
-### ArtifactStore — 工具结果持久化
+### L1：消息滑动窗口压缩（MemoryCompressor）
 
-每次工具调用结束后，结果自动写入 `artifacts/` 目录：
+`src/travel_agent/storage/memory_compressor.py`
+
+长对话时，messages 列表超出阈值后自动调用 LLM 生成摘要，将早期对话压缩为一条 SystemMessage 保留在上下文头部，近期消息完整保留：
+
+```
+压缩前：[SysMsg] [Human] [AI] [Tool] × N 轮 ...（超出 40 条）
+                              ↓ LLM 摘要
+压缩后：[SysMsg] [摘要SysMsg] [最近 10 条消息]
+```
+
+摘要同步持久化到 `<session_dir>/summary.json`，LLM 故障时自动降级为截断策略。
+
+### L2：工具结果 Snapshot 注入（ArtifactStore）
+
+`src/travel_agent/storage/agent_memory.py`
+
+每次工具调用后，结果写入本地 JSON 文件。新增 `build_context_prompt()` 方法，在每轮对话开始前读取本 session 所有工具的最新结果，格式化后注入动态 system prompt：
 
 ```
 artifacts/
 └── <session_id>/
-    ├── meta.json              # 本会话所有 artifact 的索引（node_id / 摘要 / 时间戳）
-    ├── search_poi/
-    │   └── search_poi_<hash>.json
-    ├── check_weather/
-    │   └── check_weather_<hash>.json
-    └── search_hotel/
-        └── search_hotel_<hash>.json
+    ├── meta.json
+    ├── search_poi/search_poi_<hash>.json
+    ├── check_weather/check_weather_<hash>.json
+    └── search_hotel/search_hotel_<hash>.json
 ```
 
-- 同一会话内，Agent 可直接从 `ArtifactStore` 读取已有结果，**无需重复调用高德 API**
-- `meta.json` 记录每条结果的 `node_id`、`summary`、`created_at`，便于快速检索
+LLM 在每轮开始时即可感知"本次已查过成都天气、已搜过 8 个景点"，无需重复调用 API。
+
+### L3：跨 Session 用户偏好（UserProfileStore）
+
+`src/travel_agent/storage/user_profile.py`
+
+自动从对话中提取用户偏好（城市、预算、节奏、人数、菜系等），持久化到本地 JSON，每次新 session 开始时自动注入 system prompt：
+
+```json
+{
+  "preferred_cities": ["成都", "重庆"],
+  "budget_level": "mid",
+  "travel_pace": "relaxed",
+  "group_size": 2,
+  "cuisine_preferences": ["川菜", "火锅"],
+  "session_summaries": [...]
+}
+```
 
 ### SessionLifecycleManager — 会话生命周期
 
-`SessionLifecycleManager` 统一管理多用户并发场景下的会话隔离：
+`src/travel_agent/storage/session_manager.py`
 
 | 参数 | 默认值 | 说明 |
 |------|--------|------|

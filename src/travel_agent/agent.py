@@ -14,6 +14,8 @@ from langchain_core.messages import BaseMessage, AIMessage, ToolMessage, HumanMe
 from langchain_mcp_adapters.client import MultiServerMCPClient
 
 from travel_agent.config import Settings
+from travel_agent.storage.memory_compressor import MemoryCompressor
+from travel_agent.storage.user_profile import UserProfileStore
 
 
 def _flatten_content(content) -> str:
@@ -63,7 +65,41 @@ class ClientContext:
     session_id: str
     node_manager: NodeManager
     lang: str = "zh"
-    mcp_client: Any = field(default=None)  # MultiServerMCPClient，供外部关闭
+    mcp_client: Any = field(default=None)          # MultiServerMCPClient，供外部关闭
+    memory_compressor: Any = field(default=None)   # L1: MemoryCompressor
+    user_profile: Any = field(default=None)        # L3: UserProfileStore
+    _base_system_prompt: str = field(default="", repr=False)
+
+    def build_dynamic_system_prompt(
+        self,
+        store=None,          # ArtifactStore | None，用于 L2 context snapshot
+    ) -> str:
+        """
+        动态拼装 system prompt，融合三层记忆：
+
+        ┌─────────────────────────────────────────┐
+        │ 原始 system prompt（指令 + 工具说明）      │
+        ├─────────────────────────────────────────┤
+        │ L3：用户偏好 + 历史 session 摘要          │
+        ├─────────────────────────────────────────┤
+        │ L2：本 session 已收集工具结果（snapshot）  │
+        └─────────────────────────────────────────┘
+        """
+        parts: list[str] = [self._base_system_prompt]
+
+        # L3：用户偏好画像
+        if self.user_profile is not None:
+            profile_text = self.user_profile.build_profile_prompt(lang=self.lang)
+            if profile_text:
+                parts.append("\n\n" + profile_text)
+
+        # L2：本 session 工具结果快照
+        if store is not None:
+            snapshot_text = store.build_context_prompt(lang=self.lang)
+            if snapshot_text:
+                parts.append("\n\n" + snapshot_text)
+
+        return "".join(parts)
 
 
 def _build_llm(cfg: Settings) -> BaseChatModel:
@@ -111,7 +147,10 @@ async def build_agent(cfg: Settings, session_id: str, *, lang: str = "zh"):
     - 通过 MultiServerMCPClient 连接本地 MCP Server，获取所有工具
     - 动态从 .storyline/skills 目录加载 skills
     - 使用 LangGraph create_react_agent 构建具备函数调用能力的对话 Agent
+    - 初始化三层记忆组件（L1 MemoryCompressor / L3 UserProfileStore）
     """
+    from pathlib import Path
+
     llm = _build_llm(cfg)
 
     # ── 连接 MCP Server，获取工具 ──────────────────────────────────────
@@ -133,7 +172,6 @@ async def build_agent(cfg: Settings, session_id: str, *, lang: str = "zh"):
     logger.info("[Agent] fetched %d tools from MCP Server at %s", len(tools), mcp_url)
 
     # ── 加载 Markdown Skills ───────────────────────────────────────────
-    from pathlib import Path
     _travel_root = Path(__file__).resolve().parent.parent.parent  # travel/
     skill_dir = str(_travel_root / ".storyline" / "skills")
     try:
@@ -150,6 +188,21 @@ async def build_agent(cfg: Settings, session_id: str, *, lang: str = "zh"):
         prompt=system_prompt,
     )
 
+    # ── 三层记忆：L1 MemoryCompressor ────────────────────────────────
+    _outputs_root = Path(cfg.project.outputs_dir)
+    session_dir = _outputs_root / session_id
+    compressor = MemoryCompressor(
+        llm=llm,
+        session_dir=session_dir,
+        lang=lang,
+    )
+
+    # ── 三层记忆：L3 UserProfileStore ────────────────────────────────
+    user_profile = UserProfileStore(
+        data_dir=cfg.project.data_dir,
+        user_id="default",
+    )
+
     node_manager = NodeManager(tools=tools)
     context = ClientContext(
         cfg=cfg,
@@ -157,6 +210,9 @@ async def build_agent(cfg: Settings, session_id: str, *, lang: str = "zh"):
         node_manager=node_manager,
         lang=lang,
         mcp_client=client,
+        memory_compressor=compressor,
+        user_profile=user_profile,
+        _base_system_prompt=system_prompt,
     )
 
     logger.info("[Agent] built for session %s with %d tools (via MCP)", session_id, len(tools))

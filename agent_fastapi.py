@@ -521,7 +521,17 @@ async def websocket_endpoint(ws: WebSocket):
         await ws.close()
         return
 
-    messages = []
+    # ── 三层记忆：获取 L2 ArtifactStore（从 MCP Server 的 SessionLifecycleManager 取）──
+    # 注：L2 store 通过 MCP Server lifespan context 管理，此处为 Agent 侧的镜像实例，
+    #     用于动态拼装 system prompt。
+    from travel_agent.storage.agent_memory import ArtifactStore
+    from pathlib import Path as _Path
+    _l2_store = ArtifactStore(
+        artifacts_dir=_Path(cfg.project.outputs_dir),
+        session_id=session_id,
+    )
+
+    messages: list = []   # 纯对话历史（Human / AI / Tool），不含动态 system prompt
 
     try:
         while True:
@@ -534,6 +544,26 @@ async def websocket_endpoint(ws: WebSocket):
 
             messages.append(HumanMessage(content=data))
 
+            # ── L1：对纯对话历史做消息压缩（超出阈值时自动摘要） ───────────────
+            # messages 里不含动态 system prompt，L1 压缩结果干净可复用
+            if context.memory_compressor is not None:
+                try:
+                    messages = await context.memory_compressor.maybe_compress(messages)
+                except Exception as _ce:
+                    logger.warning("[L1 compress] 压缩失败（非致命）: %s", _ce)
+
+            # ── L2/L3：动态拼装含记忆的 system prompt ─────────────────────────
+            # 每轮重新读取 L2 snapshot（磁盘文件，包含上一轮工具结果）
+            dynamic_prompt = context.build_dynamic_system_prompt(store=_l2_store)
+
+            # 将动态 system prompt 作为第一条消息前置，构造送给 ainvoke 的副本
+            # 注意：这个副本只用于本轮 ainvoke，不写回 messages
+            from langchain_core.messages import SystemMessage as _SysMsg
+            if dynamic_prompt:
+                _invoke_input = [_SysMsg(content=dynamic_prompt)] + messages
+            else:
+                _invoke_input = messages
+
             # ── 超时 + 重试 ────────────────────────────────────────────────────
             result: Optional[Dict[str, Any]] = None
             last_exc: Optional[Exception] = None
@@ -541,7 +571,7 @@ async def websocket_endpoint(ws: WebSocket):
             for attempt in range(1, MAX_RETRIES + 2):  # 最多尝试 MAX_RETRIES+1 次
                 try:
                     result = await asyncio.wait_for(
-                        agent.ainvoke({"messages": messages}),
+                        agent.ainvoke({"messages": _invoke_input}),
                         timeout=AGENT_TIMEOUT,
                     )
                     last_exc = None
@@ -604,12 +634,32 @@ async def websocket_endpoint(ws: WebSocket):
             import re as _re
             _block_types = _re.findall(r'"__type":\s*"([^"]+)"', map_blocks)
             logger.info(
-                "[session=%s] tools=%s  map_blocks=%s  weather=%s",
-                session_id, _tool_names, _block_types, bool(weather_block),
+                "[session=%s] tools=%s  map_blocks=%s  weather=%s  msgs=%d",
+                session_id, _tool_names, _block_types, bool(weather_block), len(messages),
             )
 
-            # 清理消息历史，避免 DeepSeek 400 错误
-            messages = _clean_messages_for_next_turn(raw_messages)
+            # ── 更新纯对话历史：从 raw_messages 中提取非动态-system 的消息 ────
+            # raw_messages 包含 _invoke_input 里所有消息 + 本轮新增的 AI/Tool 消息。
+            # 我们只保留非 SystemMessage 的部分（动态 system prompt 不进历史）。
+            cleaned = _clean_messages_for_next_turn(raw_messages)
+            messages = [m for m in cleaned if not isinstance(m, type(None))]
+            # 过滤掉动态注入的 SystemMessage（只保留 L1 压缩摘要 SystemMessage）
+            from langchain_core.messages import SystemMessage as _SysMsg2
+            messages = [
+                m for m in messages
+                if not isinstance(m, _SysMsg2)
+                or "\u3010\u5386\u53f2\u5bf9\u8bdd\u6458\u8981\u3011" in str(getattr(m, "content", ""))  # 保留 L1 摘要
+                or "[Conversation Summary]" in str(getattr(m, "content", ""))
+            ]
+
+            # ── L3：轮次结束后自动提取用户偏好 ───────────────────────────────
+            if context.user_profile is not None:
+                try:
+                    context.user_profile.extract_preferences_from_messages(
+                        messages, lang=context.lang
+                    )
+                except Exception as _pe:
+                    logger.debug("[L3 profile] 偏好提取失败（非致命）: %s", _pe)
 
             reply = final_text or "(没有生成回复)"
             if map_blocks:
@@ -619,6 +669,17 @@ async def websocket_endpoint(ws: WebSocket):
 
             await ws.send_text(reply)
     except WebSocketDisconnect:
+        # ── session 结束：将 L1 摘要存入 L3 用户历史 ──────────────────────
+        if context.memory_compressor is not None and context.user_profile is not None:
+            try:
+                persisted = context.memory_compressor.load_persisted_summary()
+                if persisted:
+                    context.user_profile.add_session_summary(
+                        session_id=session_id, summary=persisted
+                    )
+                    logger.info("[L3] session %s 摘要已存入用户历史", session_id)
+            except Exception as _se:
+                logger.debug("[L3 persist] 摘要存储失败（非致命）: %s", _se)
         logger.info("WebSocket 连接断开：%s", session_id)
 
 
